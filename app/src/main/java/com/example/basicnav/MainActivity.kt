@@ -1,64 +1,64 @@
 package com.example.basicnav
 
+//import androidx.compose.material3.Scaffold
+
+
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material3.Icon
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.ScrollState
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.TextField
-//import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.basicnav.ui.theme.BasicnavTheme
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.ui.Alignment
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import android.content.Context
-import androidx.compose.ui.platform.LocalContext
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-
-
-import androidx.compose.foundation.border
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.example.basicnav.ui.theme.BasicnavTheme
 import java.io.File
 import java.io.FileOutputStream
 
@@ -178,46 +178,111 @@ fun TrackingScreen() {
 
 @Composable
 fun GoalsScreen() {
+    var selectedGoal by rememberSaveable { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.Top,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("Goals Screen", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Text("Goals", fontSize = 28.sp, fontWeight = FontWeight.Bold)
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        // Weight Loss Button
-        Text(
-            text = "WEIGHT LOSS",
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { println("Weight loss clicked") }
-                .background(Color.Blue, RoundedCornerShape(8.dp))
-                .padding(16.dp),
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            fontSize = 18.sp
+        // Weight Loss Goal
+        GoalCard(
+            title = "Weight Loss",
+            icon = Icons.Default.Info,
+            backgroundColor = Color(0xFF1976D2),
+            isSelected = selectedGoal == "weight_loss",
+            onClick = {
+                selectedGoal = if (selectedGoal == "weight_loss") null else "weight_loss"
+                saveToStorage(context, "selected_goal", selectedGoal ?: "")
+            }
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Muscle Growth Button
-        Text(
-            text = "MUSCLE GROWTH",
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { println("Muscle growth clicked") }
-                .background(Color.Green, RoundedCornerShape(8.dp))
-                .padding(16.dp),
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            fontSize = 18.sp
+        // Muscle Growth Goal
+        GoalCard(
+            title = "Muscle Growth",
+            icon = Icons.Default.Build,
+            backgroundColor = Color(0xFF388E3C),
+            isSelected = selectedGoal == "muscle_growth",
+            onClick = {
+                selectedGoal = if (selectedGoal == "muscle_growth") null else "muscle_growth"
+                saveToStorage(context, "selected_goal", selectedGoal ?: "")
+            }
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // General Fitness Goal
+        GoalCard(
+            title = "General Fitness",
+            icon = Icons.Default.AccountBox,
+            backgroundColor = Color(0xFFF57C00),
+            isSelected = selectedGoal == "fitness",
+            onClick = {
+                selectedGoal = if (selectedGoal == "fitness") null else "fitness"
+                saveToStorage(context, "selected_goal", selectedGoal ?: "")
+            }
+        )
+
+        if (selectedGoal != null) {
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(onClick = { selectedGoal = null }) {
+                Text("Clear Selection")
+            }
+        }
+    }
+}
+
+@Composable
+fun GoalCard(
+    title: String,
+    icon: ImageVector,
+    backgroundColor: Color,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                color = backgroundColor.copy(alpha = if (isSelected) 1f else 0.7f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .border(
+                width = if (isSelected) 3.dp else 0.dp,
+                color = Color.White,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable { onClick() }
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                icon,
+                contentDescription = title,
+                tint = Color.White,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = title,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp
+            )
+        }
     }
 }
 
