@@ -138,64 +138,6 @@ fun BasicnavApp() {
     }
 }
 
-@Composable
-fun TrackingScreen() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Tracking Screen", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-fun GoalsScreen() {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Goals Screen", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Weight Loss Button
-        Text(
-            text = "WEIGHT LOSS",
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { println("Weight loss clicked") }
-                .background(Color.Blue, RoundedCornerShape(8.dp))
-                .padding(16.dp),
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            fontSize = 18.sp
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Muscle Growth Button
-        Text(
-            text = "MUSCLE GROWTH",
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { println("Muscle growth clicked") }
-                .background(Color.Green, RoundedCornerShape(8.dp))
-                .padding(16.dp),
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            fontSize = 18.sp
-        )
-    }
-}
-
 @Preview(showBackground = true)
 @Composable
 fun PreviewBasicnavApp() {

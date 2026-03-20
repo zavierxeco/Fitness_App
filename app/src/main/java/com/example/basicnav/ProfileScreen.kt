@@ -59,8 +59,7 @@ fun ProfileScreen() {
     // Profile image URI
     var profileImageUri by remember { mutableStateOf<Uri?>(null) }
 
-    // Load saved image from permanent storage
-    LaunchedEffect(Unit) {
+    fun loadProfileImage() {
         // Try to load from permanent file first
         val file = File(context.filesDir, "profile_pic.jpg")
         if (file.exists()) {
@@ -72,6 +71,10 @@ fun ProfileScreen() {
                 profileImageUri = Uri.parse(savedImageUriString)
             }
         }
+    }
+    // Load saved image from permanent storage
+    LaunchedEffect(Unit) {
+        loadProfileImage()
     }
 
     var isEditing by remember { mutableStateOf(false) }
@@ -98,6 +101,8 @@ fun ProfileScreen() {
                     val permanentUri = Uri.fromFile(file)
                     profileImageUri = permanentUri
                     saveToStorage(context, "profile_image", permanentUri.toString())
+
+                    loadProfileImage()
 
                 } catch (e: Exception) {
                     // Fallback to original (temporary)
