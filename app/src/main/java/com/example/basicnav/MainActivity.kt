@@ -1,5 +1,6 @@
 package com.example.basicnav
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -7,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Info
@@ -36,6 +38,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.filled.Settings
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,6 +79,7 @@ fun BasicnavApp() {
                 0 -> TrackingScreen()
                 1 -> GoalsScreen()
                 2 -> ProfileScreen()
+                3 -> DebugScreen(onBack = { currentScreen = 0 })
             }
         }
 
@@ -134,6 +138,21 @@ fun BasicnavApp() {
                     color = if (currentScreen == 2) Color.Blue else Color.Gray
                 )
             }
+            // Debug button
+            Column(
+                modifier = Modifier.clickable { currentScreen = 3 },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = "Debug",
+                    tint = if (currentScreen == 3) Color.Blue else Color.Gray
+                )
+                Text(
+                    "Debug",
+                    color = if (currentScreen == 3) Color.Blue else Color.Gray
+                )
+            }
         }
     }
 }
@@ -144,4 +163,14 @@ fun PreviewBasicnavApp() {
     BasicnavTheme {
         BasicnavApp()
     }
+}
+
+fun saveToStorage(context: Context, key: String, value: String) {
+    val prefs = context.getSharedPreferences("profile_data", Context.MODE_PRIVATE)
+    prefs.edit().putString(key, value).apply()
+}
+
+fun loadFromStorage(context: Context, key: String, defaultValue: String): String {
+    val prefs = context.getSharedPreferences("profile_data", Context.MODE_PRIVATE)
+    return prefs.getString(key, defaultValue) ?: defaultValue
 }

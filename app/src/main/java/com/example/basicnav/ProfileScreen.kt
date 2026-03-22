@@ -261,15 +261,6 @@ fun ProfileScreen() {
     }
 }
 // Storage helper functions
-private fun saveToStorage(context: Context, key: String, value: String) {
-    val prefs = context.getSharedPreferences("profile_data", Context.MODE_PRIVATE)
-    prefs.edit().putString(key, value).apply()
-}
-
-private fun loadFromStorage(context: Context, key: String, defaultValue: String): String {
-    val prefs = context.getSharedPreferences("profile_data", Context.MODE_PRIVATE)
-    return prefs.getString(key, defaultValue) ?: defaultValue
-}
 
 @Composable
 fun ProfileField(
