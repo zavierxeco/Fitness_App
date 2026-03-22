@@ -17,12 +17,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import android.content.Intent
+import androidx.core.content.FileProvider
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
 object DebugLogger {
-    private val logs = mutableListOf<String>()
+    private var logs = mutableListOf<String>()
     private val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
 
     fun addLog(message: String) {
@@ -39,30 +41,46 @@ object DebugLogger {
         addLog("Logs cleared")
     }
 
-    suspend fun saveLogsToFile(context: Context): File? {
-        return withContext(Dispatchers.IO) {
+    suspend fun shareLogs(context: Context) {
+        withContext(Dispatchers.IO) {
             try {
                 val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                 val fileName = "ring_debug_$timeStamp.txt"
 
-                val file = File(context.getExternalFilesDir(null), fileName)
+                // Create file in cache
+                val cacheFile = File(context.cacheDir, fileName)
                 val content = logs.joinToString("\n")
-                file.writeText(content)
+                cacheFile.writeText(content)
 
-                addLog("Logs saved to: ${file.absolutePath}")
-                file
+                // Get URI for sharing
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    cacheFile
+                )
+
+                // Create share intent
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                // Start share menu
+                context.startActivity(Intent.createChooser(shareIntent, "Share Debug Logs"))
+
+                addLog("Logs shared via Android share menu")
             } catch (e: Exception) {
-                addLog("Error saving logs: ${e.message}")
-                null
+                addLog("Error sharing logs: ${e.message}")
             }
         }
     }
 }
 
 @Composable
-fun DebugScreen(onBack: () -> Unit) {
+fun DebugScreen() {
     val context = LocalContext.current
-    val logs by remember { mutableStateOf(DebugLogger.getLogs()) }
+    var logs by remember { mutableStateOf(DebugLogger.getLogs()) }
     val scope = rememberCoroutineScope()
     var isSaving by remember { mutableStateOf(false) }
 
@@ -90,10 +108,6 @@ fun DebugScreen(onBack: () -> Unit) {
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
-
-            IconButton(onClick = onBack) {
-                Text("← Back")
-            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -104,7 +118,10 @@ fun DebugScreen(onBack: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Button(
-                onClick = { DebugLogger.clearLogs() },
+                onClick = {
+                        DebugLogger.clearLogs()
+                        logs = DebugLogger.getLogs()  // Force refresh
+                    },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error
@@ -112,19 +129,18 @@ fun DebugScreen(onBack: () -> Unit) {
             ) {
                 Text("Clear Logs")
             }
-
             Button(
                 onClick = {
                     scope.launch {
                         isSaving = true
-                        DebugLogger.saveLogsToFile(context)
+                        DebugLogger.shareLogs(context)
                         isSaving = false
                     }
                 },
                 modifier = Modifier.weight(1f),
                 enabled = !isSaving
             ) {
-                Text(if (isSaving) "Saving..." else "Save to File")
+                Text(if (isSaving) "Sharing..." else "Share Logs")
             }
         }
 
