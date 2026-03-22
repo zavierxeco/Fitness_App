@@ -9,6 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModelProvider
+
 import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Info
@@ -29,16 +32,15 @@ import androidx.compose.ui.unit.sp
 import com.example.basicnav.ui.theme.BasicnavTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.ViewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,6 +56,14 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun BasicnavApp() {
+    val context = LocalContext.current
+    val ringViewModel: RingViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return RingViewModel(context) as T
+            }
+        }
+    )
     var currentScreen by rememberSaveable { mutableStateOf(0) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -76,10 +86,10 @@ fun BasicnavApp() {
         // Content area
         Box(modifier = Modifier.weight(1f)) {
             when (currentScreen) {
-                0 -> TrackingScreen()
+                0 -> TrackingScreen(ringViewModel)
                 1 -> GoalsScreen()
                 2 -> ProfileScreen()
-                3 -> DebugScreen(onBack = { currentScreen = 0 })
+                3 -> DebugScreen()
             }
         }
 
