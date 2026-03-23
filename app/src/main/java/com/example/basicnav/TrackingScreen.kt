@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import androidx.core.app.ActivityCompat
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+//import androidx.compose.material3.value
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,16 +41,6 @@ class SimpleRingManager(private val appContext: Context) {
     val discoveredDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
     val isScanning = MutableStateFlow(false)
     val isConnecting = MutableStateFlow(false)
-
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun getBattery() {
-        //DebugLogger.addLog("getBattery() called")
-        val command = ByteArray(16)
-        command[0] = 3
-        command[15] = 3  // CRC = 3 (since commandId=3, all data=0)
-        writeChar?.value = command
-        gatt?.writeCharacteristic(writeChar)
-    }
 
     fun hasPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -148,22 +139,18 @@ class SimpleRingManager(private val appContext: Context) {
 
                 DebugLogger.addLog("Command ID: $commandId, Has Error: $hasError")
 
-                if (commandId == 30) {
-                    if (hasError) {
-                        DebugLogger.addLog("Ring error: Not ready for BPM. Make sure ring is on finger and try again.")
-                    } else {
-//                        val bpmValue = data[1].toInt()
-//                        if (bpmValue in 1..250) {
-//                            bpm.value = bpmValue
-//                            DebugLogger.addLog("BPM: $bpmValue")
-//                        }
-                    }
-                    val bpmValue = data[1].toInt()
-                    if (bpmValue in 1..250) {
-                        bpm.value = bpmValue
-                        DebugLogger.addLog("BPM: $bpmValue")
+                if (commandId == 105) {
+                    val dataType = data[1].toInt()
+
+                    if (dataType == 6) {  // Heart Rate data
+                        val bpmValue = data[3].toInt()  // Index 3 contains BPM
+                        if (bpmValue in 30..200) {
+                            bpm.value = bpmValue
+                            DebugLogger.addLog("BPM from ID 105 index3: $bpmValue")
+                        }
                     }
                 }
+
                 if (commandId == 3) {
                     val batteryPercent = data[1].toInt()
                     val charging = data[2].toInt() == 1
@@ -175,20 +162,20 @@ class SimpleRingManager(private val appContext: Context) {
         })
     }
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun enableHeartRateSettings() {
+    fun disconnect() {
+        DebugLogger.addLog("disconnect() called")
+        gatt?.disconnect()
+        gatt?.close()
+        gatt = null
+        isConnected.value = false
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    fun getBattery() {
+        //DebugLogger.addLog("getBattery() called")
         val command = ByteArray(16)
-        command[0] = 22   // Command ID
-        command[1] = 1    // Action: Write
-        command[2] = 1    // isEnabled: Yes
-        command[3] = 1    // Interval: 5 minutes
-
-        // Calculate CRC
-        var sum = 0
-        for (i in 0 until 15) {
-            sum += command[i].toInt() and 0xFF
-        }
-        command[15] = (sum and 0xFF).toByte()
-
+        command[0] = 3
+        command[15] = 3  // CRC = 3 (since commandId=3, all data=0)
         writeChar?.value = command
         gatt?.writeCharacteristic(writeChar)
     }
@@ -203,26 +190,96 @@ class SimpleRingManager(private val appContext: Context) {
         gatt?.writeCharacteristic(writeChar)
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun disconnect() {
-        DebugLogger.addLog("disconnect() called")
-        gatt?.disconnect()
-        gatt?.close()
-        gatt = null
-        isConnected.value = false
+    fun setHeartRateInterval(minutes: Int) {
+        DebugLogger.addLog("setHeartRateInterval() called - interval: $minutes minutes")
+        val command = ByteArray(16)
+        command[0] = 22   // Heart Rate Settings command
+        command[1] = 1    // Write action
+        command[2] = 1    // Enable (1 = on, 0 = off)
+        command[3] = minutes.toByte()  // Interval in minutes (1-60)
+
+        // Calculate CRC
+        var sum = 0
+        for (i in 0 until 15) {
+            sum += command[i].toInt() and 0xFF
+        }
+        command[15] = (sum and 0xFF).toByte()
+
+        writeChar?.value = command
+        gatt?.writeCharacteristic(writeChar)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun startBPM() {
-        DebugLogger.addLog("startBPM() called")
+        DebugLogger.addLog("startBPM() called - ID 21 Historical Heart Rate")
         val command = ByteArray(16)
-        command[0] = 30  // Command ID for Realtime Heart Rate
-        command[1] = 3   // Type = 3 (as per app)
-        // bytes 2-14 are unused (already 0)
-        command[15] = 33
+        command[0] = 21  // ID 21 for Historical Heart Rate
+
+        // Set current Unix time (seconds since 1970)
+        val currentTime = System.currentTimeMillis() / 1000
+        command[1] = ((currentTime shr 24) and 0xFF).toByte()
+        command[2] = ((currentTime shr 16) and 0xFF).toByte()
+        command[3] = ((currentTime shr 8) and 0xFF).toByte()
+        command[4] = (currentTime and 0xFF).toByte()
+        // bytes 5-14 are unused (0)
+
+        // Calculate CRC
+        var sum = 0
+        for (i in 0 until 15) {
+            sum += command[i].toInt() and 0xFF
+        }
+        command[15] = (sum and 0xFF).toByte()
 
         writeChar?.value = command
         gatt?.writeCharacteristic(writeChar)
+    }
+}
+
+@Composable
+fun BatterySection(manager: SimpleRingManager) {
+    val battery by manager.battery.collectAsStateWithLifecycle()
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = when (battery) {
+                in 0..15 -> Color(0x33FF0000)
+                in 16..50 -> Color(0x33FFA500)
+                else -> Color(0x3300FF00)
+            }
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Battery Level", fontSize = 16.sp, color = Color.Gray)
+                Text(
+                    text = "$battery%",
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = when (battery) {
+                        in 0..15 -> Color.Red
+                        in 16..50 -> Color(0xFFFFA500)
+                        else -> Color(0xFF4CAF50)
+                    }
+                )
+            }
+            Button(
+                onClick = { manager.getBattery() },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF2196F3)
+                )
+            ) {
+                Text("Check Battery")
+            }
+        }
     }
 }
 
@@ -239,43 +296,6 @@ fun BPMDisplay(bpm: Int) {
             color = if (bpm > 0) Color.Red else Color.Gray
         )
         Text("BPM", fontSize = 24.sp)
-    }
-}
-
-// Battery Display function
-@Composable
-fun BatteryDisplay(batteryLevel: Int) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 32.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = when (batteryLevel) {
-                in 0..15 -> Color(0xFFF44336) // Red - Critical
-                in 16..50 -> Color(0xFFFF9800) // Orange - Low
-                else -> Color(0xFF4CAF50) // Green - Good
-            }
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Battery",
-                color = Color.White,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "$batteryLevel%",
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
     }
 }
 
@@ -298,15 +318,17 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
         if (connected) {
             showDeviceList = false
         }
+        delay(3000)
+        manager.getBattery()
+        delay(3000)
+        manager.enableHeartRate()
+        delay(3000)
+        manager.setHeartRateInterval(1)
+        delay(3000)
+        //manager.startBPM()
         while(connected){
-            delay(1000)
-            manager.enableHeartRateSettings()
-            delay(3000)
-            manager.enableHeartRate()
-            delay(3000)
             manager.getBattery()
-            delay(2000)
-            manager.startBPM()
+            delay(60000)
         }
     }
 
@@ -316,23 +338,13 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
         verticalArrangement = Arrangement.Center
     ) {
         if (connected) {
-            // Battery Level at the top
-            BatteryDisplay(batteryLevel = battery)
-
-            Spacer(modifier = Modifier.height(16.dp))
-
+            // Battery Section
+            BatterySection(manager)
             // BPM Display
             BPMDisplay(bpm = bpm)
-
-            Spacer(modifier = Modifier.height(32.dp))
-
             // Connected UI
             Button(onClick = { manager.disconnect() }) {
                 Text("Disconnect")
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(onClick = { manager.startBPM() }) {
-                Text("Start BPM")
             }
         } else {
             // Scan UI - separated into its own function
