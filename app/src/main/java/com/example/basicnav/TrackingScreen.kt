@@ -113,6 +113,28 @@ class SimpleRingManager(private val appContext: Context) {
         isScanning.value = false
     }
 
+    private var last105Time = 0L
+    private var lastDataArray = intArrayOf()
+    private var lastResponseCount = 0
+
+    suspend fun waitFor105Response(timeoutMs: Long = 10000): Boolean {
+        val startTime = System.currentTimeMillis()
+        val startCount = lastResponseCount
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            if (lastResponseCount > startCount) {
+                // New response received, check if it has non-zero at index 3
+                if (lastDataArray.isNotEmpty() &&
+                    lastDataArray[0] == 105 &&
+                    lastDataArray.size > 3 &&
+                    lastDataArray[3] != 0) {
+                    return true
+                }
+            }
+            delay(100)
+        }
+        return false
+    }
+
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun connect(device: BluetoothDevice) {
         if (isConnecting.value) {
@@ -165,7 +187,10 @@ class SimpleRingManager(private val appContext: Context) {
                 }
 
                 if (commandId == 105) {
+                    last105Time = System.currentTimeMillis()  // Add this line
                     val dataType = data[1].toInt()
+                    lastDataArray = data  // Store for wait function
+                    lastResponseCount++
 
                     when (dataType) {
                         6 -> {  // Heart Rate (realtime)
@@ -567,15 +592,36 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
         delay(3000)
         manager.getBattery()
         delay(3000)
-        manager.enableHeartRate()
-        delay(3000)
-        //manager.requestDeviceNotify()
-        //manager.measureSpO2()
-        delay(3000)
+//        delay(3000)
+//        //manager.requestDeviceNotify()
+//        manager.measureSpO2()
+//        delay(3000)
+        //manager.enableHeartRate()
         //manager.syncHistoricalSleep()
         while(connected){
+            delay(2000)
             manager.getBattery()
-            delay(60000)
+            DebugLogger.addLog("Battery: ${manager.battery.value}%")
+            delay(2000)
+            // 2. Get Heart Rate - wait for ID 105 response
+            manager.enableHeartRate()
+            DebugLogger.addLog("Waiting for BPM (ID 105)...")
+            if (manager.waitFor105Response(40000)) {
+                DebugLogger.addLog("BPM: ${manager.bpm.value}")
+            }
+            else{
+                DebugLogger.addLog("BPM: skip")
+            }
+            // 3. Get SpO2 - wait for ID 105 response
+            delay(2000)
+            manager.measureSpO2()
+            DebugLogger.addLog("Waiting for SpO2 (ID 105)...")
+            if (manager.waitFor105Response(40000)) {
+                DebugLogger.addLog("SpO2: ${manager.spo2.value}%")
+            }
+            else{
+                DebugLogger.addLog("SpO2: skip")
+            }
         }
     }
 
