@@ -359,19 +359,19 @@ class SimpleRingManager(private val appContext: Context) {
 }
 
 @Composable
-fun BatterySection(manager: SimpleRingManager) {
-    val battery by manager.battery.collectAsStateWithLifecycle()
-
+fun BiometricCard(
+    title: String,
+    value: String,
+    icon: String,
+    color: Color,
+    valueColor: Color = color
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = when (battery) {
-                in 0..15 -> Color(0x33FF0000)
-                in 16..50 -> Color(0x33FFA500)
-                else -> Color(0x3300FF00)
-            }
+            containerColor = color.copy(alpha = 0.2f)
         )
     ) {
         Row(
@@ -382,133 +382,15 @@ fun BatterySection(manager: SimpleRingManager) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text("Battery Level", fontSize = 16.sp, color = Color.Gray)
+                Text(title, fontSize = 16.sp, color = Color.Gray)
                 Text(
-                    text = "$battery%",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = when (battery) {
-                        in 0..15 -> Color.Red
-                        in 16..50 -> Color(0xFFFFA500)
-                        else -> Color(0xFF4CAF50)
-                    }
-                )
-            }
-            Button(
-                onClick = { manager.getBattery() },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF2196F3)
-                )
-            ) {
-                Text("Check Battery")
-            }
-        }
-    }
-}
-
-// Separate BPM Display function
-@Composable
-fun BPMDisplay(bpm: Int) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0x33F44336)
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Heart Rate", fontSize = 16.sp, color = Color.Gray)
-                Text(
-                    text = if (bpm > 0) "$bpm" else "--",
+                    text = value,
                     fontSize = 48.sp,
                     fontWeight = FontWeight.Bold,
-                    color = when (bpm) {
-                        in 60..100 -> Color(0xFF4CAF50)
-                        in 101..120 -> Color(0xFFFF9800)
-                        else -> Color(0xFFF44336)
-                    }
-                )
-                Text("BPM", fontSize = 14.sp, color = Color.Gray)
-            }
-            Text("❤️", fontSize = 48.sp)
-        }
-    }
-}
-
-@Composable
-fun SpO2Card(spo2: Int) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0x332196F3)
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Blood Oxygen", fontSize = 16.sp, color = Color.Gray)
-                Text(
-                    text = if (spo2 > 0) "$spo2%" else "--",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = when (spo2) {
-                        in 95..100 -> Color(0xFF4CAF50)
-                        in 90..94 -> Color(0xFFFF9800)
-                        else -> Color(0xFFF44336)
-                    }
+                    color = valueColor
                 )
             }
-            Text("💧", fontSize = 40.sp)
-        }
-    }
-}
-
-@Composable
-fun StressCard(stress: Int) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0x33FF9800)
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Stress Level", fontSize = 16.sp, color = Color.Gray)
-                Text(
-                    text = if (stress > 0) "$stress" else "--",
-                    fontSize = 48.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = when (stress) {
-                        in 0..30 -> Color(0xFF4CAF50)
-                        in 31..60 -> Color(0xFFFF9800)
-                        else -> Color(0xFFF44336)
-                    }
-                )
-            }
-            Text("🧘", fontSize = 48.sp)
+            Text(icon, fontSize = 48.sp)
         }
     }
 }
@@ -717,10 +599,60 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                BatterySection(manager)
-                BPMDisplay(bpm = bpm)
-                SpO2Card(spo2 = spo2)
-                StressCard(stress = stress)
+                // Battery
+                BiometricCard(
+                    title = "Battery",
+                    value = "$battery%",
+                    icon = when (battery) {
+                        in 0..15 -> "🔴"
+                        in 16..50 -> "🟠"
+                        else -> "🟢"
+                    },
+                    color = when (battery) {
+                        in 0..15 -> Color.Red
+                        in 16..50 -> Color(0xFFFF9800)
+                        else -> Color(0xFF4CAF50)
+                    }
+                )
+
+                // Heart Rate
+                BiometricCard(
+                    title = "Heart Rate",
+                    value = if (bpm > 0) "$bpm" else "--",
+                    icon = "❤️",
+                    color = Color.Red,
+                    valueColor = when (bpm) {
+                        in 60..100 -> Color(0xFF4CAF50)
+                        in 101..120 -> Color(0xFFFF9800)
+                        else -> Color(0xFFF44336)
+                    }
+                )
+
+                // SpO2
+                BiometricCard(
+                    title = "Blood Oxygen",
+                    value = if (spo2 > 0) "$spo2%" else "--",
+                    icon = "💧",
+                    color = Color(0xFF2196F3),
+                    valueColor = when (spo2) {
+                        in 95..100 -> Color(0xFF4CAF50)
+                        in 90..94 -> Color(0xFFFF9800)
+                        else -> Color(0xFFF44336)
+                    }
+                )
+
+                // Stress
+                BiometricCard(
+                    title = "Stress Level",
+                    value = if (stress > 0) "$stress" else "--",
+                    icon = "🧘",
+                    color = Color(0xFFFF9800),
+                    valueColor = when (stress) {
+                        in 0..30 -> Color(0xFF4CAF50)
+                        in 31..60 -> Color(0xFFFF9800)
+                        else -> Color(0xFFF44336)
+                    }
+                )
                 SleepCard(sleepRecord)
                 SleepHistoryCard(sleepHistory)
                 Button(
