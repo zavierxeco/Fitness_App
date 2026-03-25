@@ -282,44 +282,25 @@ class SimpleRingManager(private val appContext: Context) {
         gatt?.writeCharacteristic(writeChar)
     }
 
-    fun enableHeartRate() {
-        val command = ByteArray(16)
-        command[0] = 105  // Data Request command
-        command[1] = 6    // DataType.RealtimeHeartRate = 6
-        command[2] = 1    // DataAction.Start = 1
-        command[15] = 112
-        writeChar?.value = command
-        gatt?.writeCharacteristic(writeChar)
-    }
-
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun measureSpO2() {
-        DebugLogger.addLog("measureSpO2() called")
+    fun measureBiometric(dataType: Int, logName: String) {
+        DebugLogger.addLog("measure$logName() called")
         val command = ByteArray(16)
         command[0] = 105  // Data Request
-        command[1] = 3    // DataType = SpO2 (from Flutter: requestSpO2 is 6903)
+        command[1] = dataType.toByte()
         command[2] = 1    // Start measurement
-        command[15] = 107 // CRC (105+1+1=107)
-        writeChar?.value = command
-        gatt?.writeCharacteristic(writeChar)
-    }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun measureStress() {
-        DebugLogger.addLog("measureStress() called")
-        val command = ByteArray(16)
-        command[0] = 105  // Data Request
-        command[1] = 8    // DataType = Stress (from Flutter: requestStress is 6908)
-        command[2] = 1    // Start measurement
         // Calculate CRC
         var sum = 0
         for (i in 0 until 15) {
             sum += command[i].toInt() and 0xFF
         }
         command[15] = (sum and 0xFF).toByte()
+
         writeChar?.value = command
         gatt?.writeCharacteristic(writeChar)
     }
+
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun requestDeviceNotify() {
         DebugLogger.addLog("requestDeviceNotify() called - testing ID 115")
@@ -556,7 +537,7 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
             DebugLogger.addLog("Battery: ${manager.battery.value}%")
             delay(2000)
             // 2. Get Heart Rate - wait for ID 105 response
-            manager.enableHeartRate()
+            manager.measureBiometric(6, "HeartRate")
             DebugLogger.addLog("Waiting for BPM (ID 105)...")
             if (manager.waitFor105Response(6,40000)) {
                 DebugLogger.addLog("BPM: ${manager.bpm.value}")
@@ -566,7 +547,7 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
             }
             // 3. Get SpO2 - wait for ID 105 response
             delay(2000)
-            manager.measureSpO2()
+            manager.measureBiometric(3, "SpO2")
             DebugLogger.addLog("Waiting for SpO2 (ID 105)...")
             if (manager.waitFor105Response(3,40000)) {
                 DebugLogger.addLog("SpO2: ${manager.spo2.value}%")
@@ -576,7 +557,7 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
             }
             // 4. Get Stress
             delay(2000)
-            manager.measureStress()
+            manager.measureBiometric(8, "Stress")
             DebugLogger.addLog("Waiting for Stress...")
             if (manager.waitFor105Response(8,40000)) {
                 DebugLogger.addLog("Stress: ${manager.stress.value}")
