@@ -12,8 +12,9 @@ import androidx.annotation.RequiresPermission
 import kotlinx.coroutines.delay
 import androidx.core.app.ActivityCompat
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-//import androidx.compose.material3.value
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +58,7 @@ class SimpleRingManager(private val appContext: Context) {
     val sleepData = MutableStateFlow<SleepRecord?>(null)
     val sleepHistory = MutableStateFlow<List<SleepRecord>>(emptyList())
     val spo2 = MutableStateFlow(0)
+    val stress = MutableStateFlow(0)
 
     fun hasPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -117,7 +119,7 @@ class SimpleRingManager(private val appContext: Context) {
     private var lastDataArray = intArrayOf()
     private var lastResponseCount = 0
 
-    suspend fun waitFor105Response(timeoutMs: Long = 10000): Boolean {
+    suspend fun waitFor105Response(dataType: Int, timeoutMs: Long = 10000): Boolean {
         val startTime = System.currentTimeMillis()
         val startCount = lastResponseCount
         while (System.currentTimeMillis() - startTime < timeoutMs) {
@@ -126,7 +128,8 @@ class SimpleRingManager(private val appContext: Context) {
                 if (lastDataArray.isNotEmpty() &&
                     lastDataArray[0] == 105 &&
                     lastDataArray.size > 3 &&
-                    lastDataArray[3] != 0) {
+                    lastDataArray[3] != 0 &&
+                    lastDataArray[1] == dataType) {
                     return true
                 }
             }
@@ -207,10 +210,10 @@ class SimpleRingManager(private val appContext: Context) {
                                 DebugLogger.addLog("SpO2: $spo2Value%")
                             }
                         }
-                        2 -> {  // Stress (from Flutter code: HeartSpO2StressSubtype.stress)
+                        8 -> {  // Stress
                             val stressValue = data[3]
                             if (stressValue in 0..100) {
-                                // stress.value = stressValue (if you add stress)
+                                stress.value = stressValue
                                 DebugLogger.addLog("Stress: $stressValue")
                             }
                         }
@@ -297,6 +300,23 @@ class SimpleRingManager(private val appContext: Context) {
         command[1] = 3    // DataType = SpO2 (from Flutter: requestSpO2 is 6903)
         command[2] = 1    // Start measurement
         command[15] = 107 // CRC (105+1+1=107)
+        writeChar?.value = command
+        gatt?.writeCharacteristic(writeChar)
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    fun measureStress() {
+        DebugLogger.addLog("measureStress() called")
+        val command = ByteArray(16)
+        command[0] = 105  // Data Request
+        command[1] = 8    // DataType = Stress (from Flutter: requestStress is 6908)
+        command[2] = 1    // Start measurement
+        // Calculate CRC
+        var sum = 0
+        for (i in 0 until 15) {
+            sum += command[i].toInt() and 0xFF
+        }
+        command[15] = (sum and 0xFF).toByte()
         writeChar?.value = command
         gatt?.writeCharacteristic(writeChar)
     }
@@ -389,16 +409,37 @@ fun BatterySection(manager: SimpleRingManager) {
 // Separate BPM Display function
 @Composable
 fun BPMDisplay(bpm: Int) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text =  "$bpm",
-            fontSize = 80.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (bpm > 0) Color.Red else Color.Gray
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0x33F44336)
         )
-        Text("BPM", fontSize = 24.sp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Heart Rate", fontSize = 16.sp, color = Color.Gray)
+                Text(
+                    text = if (bpm > 0) "$bpm" else "--",
+                    fontSize = 48.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = when (bpm) {
+                        in 60..100 -> Color(0xFF4CAF50)
+                        in 101..120 -> Color(0xFFFF9800)
+                        else -> Color(0xFFF44336)
+                    }
+                )
+                Text("BPM", fontSize = 14.sp, color = Color.Gray)
+            }
+            Text("❤️", fontSize = 48.sp)
+        }
     }
 }
 
@@ -433,6 +474,41 @@ fun SpO2Card(spo2: Int) {
                 )
             }
             Text("💧", fontSize = 40.sp)
+        }
+    }
+}
+
+@Composable
+fun StressCard(stress: Int) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0x33FF9800)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Stress Level", fontSize = 16.sp, color = Color.Gray)
+                Text(
+                    text = if (stress > 0) "$stress" else "--",
+                    fontSize = 48.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = when (stress) {
+                        in 0..30 -> Color(0xFF4CAF50)
+                        in 31..60 -> Color(0xFFFF9800)
+                        else -> Color(0xFFF44336)
+                    }
+                )
+            }
+            Text("🧘", fontSize = 48.sp)
         }
     }
 }
@@ -579,9 +655,9 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
     val battery by manager.battery.collectAsStateWithLifecycle()
     val bpm by manager.bpm.collectAsStateWithLifecycle()
     val spo2 by manager.spo2.collectAsStateWithLifecycle()
+    val stress by manager.stress.collectAsStateWithLifecycle()
     val sleepRecord by manager.sleepData.collectAsStateWithLifecycle()
     val sleepHistory by manager.sleepHistory.collectAsStateWithLifecycle()
-    //DebugLogger.addLog("TrackingScreen() called")
 
     // Add this LaunchedEffect to check connection when screen appears
     LaunchedEffect(connected) {
@@ -589,14 +665,8 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
         if (connected) {
             showDeviceList = false
         }
-        delay(3000)
-        manager.getBattery()
-        delay(3000)
-//        delay(3000)
 //        //manager.requestDeviceNotify()
-//        manager.measureSpO2()
 //        delay(3000)
-        //manager.enableHeartRate()
         //manager.syncHistoricalSleep()
         while(connected){
             delay(2000)
@@ -606,7 +676,7 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
             // 2. Get Heart Rate - wait for ID 105 response
             manager.enableHeartRate()
             DebugLogger.addLog("Waiting for BPM (ID 105)...")
-            if (manager.waitFor105Response(40000)) {
+            if (manager.waitFor105Response(6,40000)) {
                 DebugLogger.addLog("BPM: ${manager.bpm.value}")
             }
             else{
@@ -616,11 +686,20 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
             delay(2000)
             manager.measureSpO2()
             DebugLogger.addLog("Waiting for SpO2 (ID 105)...")
-            if (manager.waitFor105Response(40000)) {
+            if (manager.waitFor105Response(3,40000)) {
                 DebugLogger.addLog("SpO2: ${manager.spo2.value}%")
             }
             else{
                 DebugLogger.addLog("SpO2: skip")
+            }
+            // 4. Get Stress
+            delay(2000)
+            manager.measureStress()
+            DebugLogger.addLog("Waiting for Stress...")
+            if (manager.waitFor105Response(8,40000)) {
+                DebugLogger.addLog("Stress: ${manager.stress.value}")
+            } else {
+                DebugLogger.addLog("Stress: skip")
             }
         }
     }
@@ -631,16 +710,25 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
         verticalArrangement = Arrangement.Center
     ) {
         if (connected) {
-            // Battery Section
-            BatterySection(manager)
-            // BPM Display
-            BPMDisplay(bpm = bpm)
-            SpO2Card(spo2 = spo2)  // Add this
-            SleepCard(sleepRecord)
-            SleepHistoryCard(sleepHistory)
-            // Connected UI
-            Button(onClick = { manager.disconnect() }) {
-                Text("Disconnect")
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                BatterySection(manager)
+                BPMDisplay(bpm = bpm)
+                SpO2Card(spo2 = spo2)
+                StressCard(stress = stress)
+                SleepCard(sleepRecord)
+                SleepHistoryCard(sleepHistory)
+                Button(
+                    onClick = { manager.disconnect() },
+                    modifier = Modifier.padding(bottom = 16.dp)
+                ) {
+                    Text("Disconnect")
+                }
             }
         } else {
             // Scan UI - separated into its own function
