@@ -1,7 +1,6 @@
 package com.example.basicnav
 
 import android.content.Context
-import android.os.Environment
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,7 +18,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import android.content.Intent
 import androidx.core.content.FileProvider
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -88,6 +86,15 @@ fun DebugScreen() {
     val scope = rememberCoroutineScope()
     var isSaving by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    var highlightText by remember { mutableStateOf("") }
+
+    val highlightKeywords by derivedStateOf {
+        if (highlightText.isBlank()) {
+            emptyList()
+        } else {
+            highlightText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        }
+    }
 
     // Filter logs based on search query
     val filteredLogs = remember(searchQuery, allLogs) {
@@ -128,6 +135,26 @@ fun DebugScreen() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        Spacer(modifier = Modifier.height(8.dp))
+
+// Highlight Bar
+        OutlinedTextField(
+            value = highlightText,
+            onValueChange = { highlightText = it },
+            placeholder = { Text("Enter keywords to highlight (comma separated)", color = Color.Gray) },
+            leadingIcon = { Text("🎨") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = TextFieldDefaults.colors(
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                focusedPlaceholderColor = Color.LightGray,
+                unfocusedPlaceholderColor = Color.LightGray,
+                cursorColor = Color.White,
+                focusedContainerColor = Color.DarkGray,
+                unfocusedContainerColor = Color.DarkGray
+            )
+        )
 
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -219,8 +246,9 @@ fun DebugScreen() {
                         colors = CardDefaults.cardColors(
                             containerColor = when {
                                 matchesSearch -> MaterialTheme.colorScheme.tertiaryContainer
-                                log.contains("ERROR") || log.contains("error") -> MaterialTheme.colorScheme.errorContainer
-                                log.contains("BPM") -> MaterialTheme.colorScheme.primaryContainer
+                                highlightKeywords.any { keyword ->
+                                    log.contains(keyword, ignoreCase = true)
+                                } -> MaterialTheme.colorScheme.primaryContainer
                                 else -> MaterialTheme.colorScheme.surfaceVariant
                             }
                         )
