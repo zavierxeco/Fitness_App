@@ -618,7 +618,7 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
                 // Heart Rate
                 BiometricCard(
                     title = "Heart Rate",
-                    value = if (bpm > 0) "$bpm" else "--",
+                    value = if (bpm > 0) "$bpm BPM" else "--",
                     icon = "❤️",
                     color = Color.Red,
                     valueColor = when (bpm) {
