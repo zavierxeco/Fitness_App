@@ -539,31 +539,20 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
             // 2. Get Heart Rate - wait for ID 105 response
             manager.measureBiometric(6, "HeartRate")
             DebugLogger.addLog("Waiting for BPM (ID 105)...")
-            if (manager.waitFor105Response(6,40000)) {
-                DebugLogger.addLog("BPM: ${manager.bpm.value}")
-            }
-            else{
-                DebugLogger.addLog("BPM: skip")
-            }
+            manager.waitFor105Response(6,40000)
+            DebugLogger.addLog("BPM: ${manager.bpm.value}")
             // 3. Get SpO2 - wait for ID 105 response
             delay(2000)
             manager.measureBiometric(3, "SpO2")
             DebugLogger.addLog("Waiting for SpO2 (ID 105)...")
-            if (manager.waitFor105Response(3,40000)) {
-                DebugLogger.addLog("SpO2: ${manager.spo2.value}%")
-            }
-            else{
-                DebugLogger.addLog("SpO2: skip")
-            }
+            manager.waitFor105Response(3,40000)
+            DebugLogger.addLog("SpO2: ${manager.spo2.value}%")
             // 4. Get Stress
             delay(2000)
             manager.measureBiometric(8, "Stress")
             DebugLogger.addLog("Waiting for Stress...")
-            if (manager.waitFor105Response(8,40000)) {
-                DebugLogger.addLog("Stress: ${manager.stress.value}")
-            } else {
-                DebugLogger.addLog("Stress: skip")
-            }
+            manager.waitFor105Response(8,40000)
+            DebugLogger.addLog("Stress: ${manager.stress.value}")
         }
     }
 
