@@ -88,14 +88,6 @@ fun DebugScreen() {
     val listState = rememberLazyListState()
     var highlightText by remember { mutableStateOf("") }
 
-    val highlightKeywords by derivedStateOf {
-        if (highlightText.isBlank()) {
-            emptyList()
-        } else {
-            highlightText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        }
-    }
-
     // Filter logs based on search query
     val filteredLogs = remember(searchQuery, allLogs) {
         if (searchQuery.isBlank()) {
@@ -246,9 +238,8 @@ fun DebugScreen() {
                         colors = CardDefaults.cardColors(
                             containerColor = when {
                                 matchesSearch -> MaterialTheme.colorScheme.tertiaryContainer
-                                highlightKeywords.any { keyword ->
-                                    log.contains(keyword, ignoreCase = true)
-                                } -> MaterialTheme.colorScheme.primaryContainer
+                                highlightText.isNotBlank() && log.contains(highlightText, ignoreCase = true) ->
+                                    MaterialTheme.colorScheme.primaryContainer
                                 else -> MaterialTheme.colorScheme.surfaceVariant
                             }
                         )
