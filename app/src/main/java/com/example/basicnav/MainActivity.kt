@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
+import androidx.compose.material.icons.filled.Chat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,6 +74,8 @@ fun BasicnavApp() {
                 0 -> "Tracking"
                 1 -> "Goals"
                 2 -> "Profile"
+                3 -> "Debug"
+                4 -> "AI Coach"
                 else -> "App"
             },
             modifier = Modifier
@@ -90,6 +93,7 @@ fun BasicnavApp() {
                 1 -> GoalsScreen()
                 2 -> ProfileScreen()
                 3 -> DebugScreen()
+                4 -> ChatbotScreen()
             }
         }
 
@@ -161,6 +165,21 @@ fun BasicnavApp() {
                 Text(
                     "Debug",
                     color = if (currentScreen == 3) Color.Blue else Color.Gray
+                )
+            }
+            // Add Chatbot button
+            Column(
+                modifier = Modifier.clickable { currentScreen = 4 },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    Icons.Default.Chat,
+                    contentDescription = "Chatbot",
+                    tint = if (currentScreen == 4) Color.Blue else Color.Gray
+                )
+                Text(
+                    "Chatbot",
+                    color = if (currentScreen == 4) Color.Blue else Color.Gray
                 )
             }
         }
