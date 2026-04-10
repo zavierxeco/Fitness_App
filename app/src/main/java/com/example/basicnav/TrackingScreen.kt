@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.annotation.RequiresPermission
+import androidx.compose.foundation.background
 import kotlinx.coroutines.delay
 import androidx.core.app.ActivityCompat
 import androidx.compose.foundation.layout.*
@@ -26,19 +27,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.*
-
-data class SleepRecord(
-    val date: String,
-    val year: Int,
-    val month: Int,
-    val day: Int,
-    val sleepTime: String,
-    val sleepQuality: Int,
-    val durationMinutes: Int,
-    val deepSleepMinutes: Int = 0,
-    val lightSleepMinutes: Int = 0,
-    val remSleepMinutes: Int = 0
-)
+import kotlin.math.sqrt
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 
 @Suppress("DEPRECATION")
 class SimpleRingManager(private val appContext: Context) {
@@ -55,10 +46,19 @@ class SimpleRingManager(private val appContext: Context) {
     val discoveredDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
     val isScanning = MutableStateFlow(false)
     val isConnecting = MutableStateFlow(false)
-    val sleepData = MutableStateFlow<SleepRecord?>(null)
-    val sleepHistory = MutableStateFlow<List<SleepRecord>>(emptyList())
     val spo2 = MutableStateFlow(0)
     val stress = MutableStateFlow(0)
+    val rawAccelX = MutableStateFlow(0)
+    val rawAccelY = MutableStateFlow(0)
+    val rawAccelZ = MutableStateFlow(0)
+    val rawPpg = MutableStateFlow(0)
+    val rawSpO2Signal = MutableStateFlow(0)
+    val rawPpgMax = MutableStateFlow(0)
+    val rawPpgMin = MutableStateFlow(0)
+    val rawPpgDiff = MutableStateFlow(0)
+    val rawSpO2Peak1 = MutableStateFlow(0)
+    val rawSpO2Peak2 = MutableStateFlow(0)
+    val rawSpO2Peak3 = MutableStateFlow(0)
 
     fun hasPermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -118,25 +118,6 @@ class SimpleRingManager(private val appContext: Context) {
     private var last105Time = 0L
     private var lastDataArray = intArrayOf()
     private var lastResponseCount = 0
-
-    suspend fun waitFor105Response(dataType: Int, timeoutMs: Long = 10000): Boolean {
-        val startTime = System.currentTimeMillis()
-        val startCount = lastResponseCount
-        while (System.currentTimeMillis() - startTime < timeoutMs) {
-            if (lastResponseCount > startCount) {
-                // New response received, check if it has non-zero at index 3
-                if (lastDataArray.isNotEmpty() &&
-                    lastDataArray[0] == 105 &&
-                    lastDataArray.size > 3 &&
-                    lastDataArray[3] != 0 &&
-                    lastDataArray[1] == dataType) {
-                    return true
-                }
-            }
-            delay(100)
-        }
-        return false
-    }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun connect(device: BluetoothDevice) {
@@ -220,44 +201,51 @@ class SimpleRingManager(private val appContext: Context) {
                     }
                 }
 
-                if (commandId == 0xBC) {  // Sleep data response
-                    val subType = data[1].toInt()
-                    DebugLogger.addLog("Sleep data response, subtype: $subType")
+                if (commandId == 161) {  // 0xA1
+                    val subType = data[1]
 
-                    if (subType == 0x27) {
-                        // Parse sleep record
-                        val year = 2000 + data[2].toInt()
-                        val month = data[3].toInt()
-                        val day = data[4].toInt()
-                        val sleepHour = data[5].toInt()
-                        val sleepMinute = data[6].toInt()
-                        val wakeHour = data[7].toInt()
-                        val wakeMinute = data[8].toInt()
-                        val quality = data[9].toInt()  // 0-100
-                        val duration = data[10].toInt()  // Minutes
+                    when (subType) {
+                        1 -> {  // Raw SpO2 sensor data
+                            val bloodRaw = (data[2] shl 8) or data[3]
+                            rawSpO2Signal.value = bloodRaw
+                            rawSpO2Peak1.value = data[5]   // 248
+                            rawSpO2Peak2.value = data[7]   // 73
+                            rawSpO2Peak3.value = data[9]   // 175
+                            DebugLogger.addLog("Raw SpO2: blood=$bloodRaw, peaks=[${data[5]},${data[7]},${data[9]}]")
+                        }
+                        2 -> {  // Raw PPG sensor data
+                            val raw = (data[2] shl 8) or data[3]
+                            val max = (data[4] shl 8) or data[5]
+                            val min = (data[6] shl 8) or data[7]
+                            val diff = (data[8] shl 8) or data[9]
+                            rawPpg.value = raw
+                            rawPpgMax.value = max
+                            rawPpgMin.value = min
+                            rawPpgDiff.value = diff
+                            DebugLogger.addLog("Raw PPG: raw=$raw, max=$max, min=$min, diff=$diff")
+                        }
+                        3 -> {  // Accelerometer data (3-axis movement!)
+                            // 12-bit signed values (±2048) representing ±4g
+                            // 1g = ±512 in raw values
+                            val rawY = ((data[2] shl 4) or (data[3] and 0x0F)).toShort().toInt()
+                            val rawZ = ((data[4] shl 4) or (data[5] and 0x0F)).toShort().toInt()
+                            val rawX = ((data[6] shl 4) or (data[7] and 0x0F)).toShort().toInt()
 
-                        val sleepTime = String.format("%02d:%02d", sleepHour, sleepMinute)
-                        val wakeTime = String.format("%02d:%02d", wakeHour, wakeMinute)
+                            rawAccelX.value = rawX
+                            rawAccelY.value = rawY
+                            rawAccelZ.value = rawZ
 
-                        val record = SleepRecord(
-                            date = "$year-$month-$day",
-                            year = year,
-                            month = month,
-                            day = day,
-                            sleepTime = sleepTime,
-                            sleepQuality = quality,
-                            durationMinutes = duration
-                        )
+                            // Convert to g-force (approx)
+                            val gX = rawX / 512.0
+                            val gY = rawY / 512.0
+                            val gZ = rawZ / 512.0
+                            val netG = sqrt(gX * gX + gY * gY + gZ * gZ)
 
-                        sleepData.value = record
-
-                        // Add to history
-                        val currentHistory = sleepHistory.value.toMutableList()
-                        currentHistory.add(0, record)  // Add to front
-                        if (currentHistory.size > 7) currentHistory.removeAt(currentHistory.size - 1)  // Keep last 7
-                        sleepHistory.value = currentHistory
-
-                        DebugLogger.addLog("Sleep: $year-$month-$day, Sleep: $sleepTime, Wake: $wakeTime, Quality: $quality, Duration: ${duration}min")
+                            DebugLogger.addLog("Accel: X=$rawX ($gX g), Y=$rawY ($gY g), Z=$rawZ ($gZ g), net=$netG g")
+                        }
+                        else -> {
+                            DebugLogger.addLog("Unknown raw sensor subtype: $subType")
+                        }
                     }
                 }
             }
@@ -302,33 +290,27 @@ class SimpleRingManager(private val appContext: Context) {
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun requestDeviceNotify() {
-        DebugLogger.addLog("requestDeviceNotify() called - testing ID 115")
+    fun enableAllRawData() {
+        DebugLogger.addLog("enableAllRawData() called - ID A104")
         val command = ByteArray(16)
-        command[0] = 115  // Device Notify command
-
-        // Set dataType = 0 to request all? Or specific type
-        // According to documentation, this might be a request for device notifications
-        command[1] = 5    // Request all notifications
-
+        command[0] = 0xA1.toByte()  // 161
+        command[1] = 0x04.toByte()  // Enable all raw data
         // Calculate CRC
         var sum = 0
         for (i in 0 until 15) {
             sum += command[i].toInt() and 0xFF
         }
         command[15] = (sum and 0xFF).toByte()
-
         writeChar?.value = command
         gatt?.writeCharacteristic(writeChar)
     }
+
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun syncHistoricalSleep() {
-        DebugLogger.addLog("syncHistoricalSleep() called - ID BC27")
+    fun disableAllRawData() {
+        DebugLogger.addLog("disableAllRawData() called - ID A102")
         val command = ByteArray(16)
-        command[0] = 0xBC.toByte()  // 188 decimal
-        command[1] = 0x27.toByte()  // 39 decimal
-        // Bytes 2-14 unused
-        // Calculate CRC
+        command[0] = 0xA1.toByte()  // 161
+        command[1] = 0x02.toByte()  // Disable all raw data
         var sum = 0
         for (i in 0 until 15) {
             sum += command[i].toInt() and 0xFF
@@ -336,6 +318,87 @@ class SimpleRingManager(private val appContext: Context) {
         command[15] = (sum and 0xFF).toByte()
         writeChar?.value = command
         gatt?.writeCharacteristic(writeChar)
+    }
+}
+
+@Composable
+fun DataViewSelector(
+    selectedView: DataView,
+    onViewSelected: (DataView) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    // Map of views to display text and icon
+    val viewOptions = mapOf(
+        DataView.RAW_SENSOR to "📊 Raw Data",
+        DataView.HEART_RATE to "❤️ Heart Rate",
+        DataView.SPO2 to "💧 SpO2",
+        DataView.STRESS to "🧘 Stress"
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            // Current selection display (click to change)
+            Button(
+                onClick = { expanded = true },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = viewOptions[selectedView] ?: "Select View",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text("▼", fontSize = 12.sp)
+                }
+            }
+
+            // Dropdown menu
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                viewOptions.forEach { (view, label) ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = label,
+                                fontSize = 14.sp,
+                                color = if (view == selectedView)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface
+                            )
+                        },
+                        onClick = {
+                            onViewSelected(view)
+                            expanded = false
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -377,86 +440,141 @@ fun BiometricCard(
 }
 
 @Composable
-fun SleepCard(sleepRecord: SleepRecord?) {
+fun AccelerometerCard(x: Int, y: Int, z: Int) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0x339C27B0)
+            containerColor = Color(0x33FF9800)
         )
     ) {
-        if (sleepRecord == null) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Movement", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                Text("😴", fontSize = 32.sp)
-                Text("No sleep data yet", color = Color.Gray)
-                Text("Sync after waking up", fontSize = 12.sp, color = Color.Gray)
+                Column {
+                    Text("X", fontSize = 12.sp, color = Color.Gray)
+                    Text("$x", fontWeight = FontWeight.Bold)
+                }
+                Column {
+                    Text("Y", fontSize = 12.sp, color = Color.Gray)
+                    Text("$y", fontWeight = FontWeight.Bold)
+                }
+                Column {
+                    Text("Z", fontSize = 12.sp, color = Color.Gray)
+                    Text("$z", fontWeight = FontWeight.Bold)
+                }
             }
-        } else {
-            Column(
-                modifier = Modifier.padding(20.dp)
+        }
+    }
+}
+
+// PPG Card (Photoplethysmography - pulse wave)
+@Composable
+fun PpgCard(raw: Int, max: Int, min: Int, diff: Int) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0x33FF69B4)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Pulse Wave", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Raw value
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                Column {
+                    Text("Raw", fontSize = 12.sp, color = Color.Gray)
+                    Text("$raw", fontWeight = FontWeight.Bold, color = Color(0xFFFF69B4))
+                }
+                Column {
+                    Text("Max", fontSize = 12.sp, color = Color.Gray)
+                    Text("$max", fontWeight = FontWeight.Bold)
+                }
+                Column {
+                    Text("Min", fontSize = 12.sp, color = Color.Gray)
+                    Text("$min", fontWeight = FontWeight.Bold)
+                }
+                Column {
+                    Text("Diff", fontSize = 12.sp, color = Color.Gray)
+                    Text("$diff", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // Simple visual representation of pulse wave
+            if (diff > 0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(30.dp)
+                        .background(Color(0x33FF69B4))
                 ) {
-                    Text("Sleep", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        sleepRecord.date,
-                        fontSize = 14.sp,
-                        color = Color.Gray
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(diff / 5000f)
+                            .fillMaxHeight()
+                            .background(Color(0xFFFF69B4))
                     )
                 }
+            }
+        }
+    }
+}
 
-                Spacer(modifier = Modifier.height(12.dp))
+// Raw SpO2 Signal Card
+@Composable
+fun RawSpO2Card(bloodRaw: Int, peaks: List<Int>) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0x3344AAFF)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Raw SpO2 Signal", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
 
-                // Duration and Quality
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("⏱️", fontSize = 24.sp)
-                        Text(
-                            "${sleepRecord.durationMinutes / 60}h ${sleepRecord.durationMinutes % 60}m",
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text("Duration", fontSize = 12.sp, color = Color.Gray)
-                    }
+            // Raw blood value
+            Text(
+                text = "Blood Raw: $bloodRaw",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF44AAFF)
+            )
 
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("⭐", fontSize = 24.sp)
-                        Text(
-                            "${sleepRecord.sleepQuality}%",
-                            fontWeight = FontWeight.Bold,
-                            color = when (sleepRecord.sleepQuality) {
-                                in 80..100 -> Color(0xFF4CAF50)
-                                in 60..79 -> Color(0xFFFF9800)
-                                else -> Color(0xFFF44336)
-                            }
-                        )
-                        Text("Quality", fontSize = 12.sp, color = Color.Gray)
-                    }
-                }
+            Spacer(modifier = Modifier.height(8.dp))
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Sleep and Wake times
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+            // Peaks
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                peaks.forEachIndexed { index, peak ->
                     Column {
-                        Text("🌙 Bedtime", fontSize = 12.sp, color = Color.Gray)
-                        Text(sleepRecord.sleepTime, fontWeight = FontWeight.Bold)
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("☀️ Wake up", fontSize = 12.sp, color = Color.Gray)
-                        Text("${(sleepRecord.durationMinutes / 60 + sleepRecord.sleepTime.substring(0,2).toInt()) % 24}:${sleepRecord.sleepTime.substring(3)}",
-                            fontWeight = FontWeight.Bold)
+                        Text("Peak ${index + 1}", fontSize = 10.sp, color = Color.Gray)
+                        Text("$peak", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -464,46 +582,11 @@ fun SleepCard(sleepRecord: SleepRecord?) {
     }
 }
 
-@Composable
-fun SleepHistoryCard(sleepHistory: List<SleepRecord>) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0x339C27B0)
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text("📊 Sleep History", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (sleepHistory.isEmpty()) {
-                Text("No sleep history yet", fontSize = 12.sp, color = Color.Gray)
-            } else {
-                sleepHistory.forEach { record ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(record.date, fontSize = 12.sp)
-                        Text("${record.durationMinutes / 60}h${record.durationMinutes % 60}m", fontSize = 12.sp)
-                        Text("${record.sleepQuality}%", fontSize = 12.sp,
-                            color = when (record.sleepQuality) {
-                                in 80..100 -> Color(0xFF4CAF50)
-                                in 60..79 -> Color(0xFFFF9800)
-                                else -> Color(0xFFF44336)
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    }
+enum class DataView {
+    RAW_SENSOR,      // Shows all 3 raw data (accelerometer, PPG, raw SpO2)
+    HEART_RATE,      // Shows live BPM
+    SPO2,            // Shows blood oxygen
+    STRESS           // Shows stress level
 }
 
 @Composable
@@ -519,50 +602,45 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
     val bpm by manager.bpm.collectAsStateWithLifecycle()
     val spo2 by manager.spo2.collectAsStateWithLifecycle()
     val stress by manager.stress.collectAsStateWithLifecycle()
-    val sleepRecord by manager.sleepData.collectAsStateWithLifecycle()
-    val sleepHistory by manager.sleepHistory.collectAsStateWithLifecycle()
+    val accelX by manager.rawAccelX.collectAsStateWithLifecycle()
+    val accelY by manager.rawAccelY.collectAsStateWithLifecycle()
+    val accelZ by manager.rawAccelZ.collectAsStateWithLifecycle()
+    val rawPpg by manager.rawPpg.collectAsStateWithLifecycle()
+    val rawSpO2Signal by manager.rawSpO2Signal.collectAsStateWithLifecycle()
+    val rawPpgMax by manager.rawPpgMax.collectAsStateWithLifecycle()
+    val rawPpgMin by manager.rawPpgMin.collectAsStateWithLifecycle()
+    val rawPpgDiff by manager.rawPpgDiff.collectAsStateWithLifecycle()
+    var selectedView by remember { mutableStateOf(DataView.RAW_SENSOR) }
+    val rawSpO2Peak1 by manager.rawSpO2Peak1.collectAsStateWithLifecycle()
+    val rawSpO2Peak2 by manager.rawSpO2Peak2.collectAsStateWithLifecycle()
+    val rawSpO2Peak3 by manager.rawSpO2Peak3.collectAsStateWithLifecycle()
+
 
     // Add this LaunchedEffect to check connection when screen appears
-    LaunchedEffect(connected) {
+    LaunchedEffect(connected, selectedView) {
         // If already connected, don't show scan UI
         if (connected) {
             showDeviceList = false
-        }
-//        //manager.requestDeviceNotify()
-//        delay(3000)
-        //manager.syncHistoricalSleep()
-        while(connected){
-            delay(2000)
+            // Disable everything first
+            //manager.disableAllRawData()
+            delay(1000)
             manager.getBattery()
-            DebugLogger.addLog("Battery: ${manager.battery.value}%")
-            delay(2000)
-            // 2. Get Heart Rate - wait for ID 105 response
-            manager.measureBiometric(6, "HeartRate")
-            DebugLogger.addLog("Waiting for BPM (ID 105)...")
-            if (manager.waitFor105Response(6,40000)) {
-                DebugLogger.addLog("BPM: ${manager.bpm.value}")
-            }
-            else{
-                DebugLogger.addLog("BPM: skip")
-            }
-            // 3. Get SpO2 - wait for ID 105 response
-            delay(2000)
-            manager.measureBiometric(3, "SpO2")
-            DebugLogger.addLog("Waiting for SpO2 (ID 105)...")
-            if (manager.waitFor105Response(3,40000)) {
-                DebugLogger.addLog("SpO2: ${manager.spo2.value}%")
-            }
-            else{
-                DebugLogger.addLog("SpO2: skip")
-            }
-            // 4. Get Stress
-            delay(2000)
-            manager.measureBiometric(8, "Stress")
-            DebugLogger.addLog("Waiting for Stress...")
-            if (manager.waitFor105Response(8,40000)) {
-                DebugLogger.addLog("Stress: ${manager.stress.value}")
-            } else {
-                DebugLogger.addLog("Stress: skip")
+            delay(1000)
+            when (selectedView) {
+                DataView.RAW_SENSOR -> {
+                    manager.enableAllRawData()
+                    // Raw data streams continuously
+                }
+                DataView.HEART_RATE -> {
+                    manager.measureBiometric(6, "HeartRate")
+                }
+                DataView.SPO2 -> {
+                    manager.measureBiometric(3, "SpO2")
+                }
+                DataView.STRESS -> {
+                    // Stress is on-demand
+                    manager.measureBiometric(8, "Stress")
+                }
             }
         }
     }
@@ -596,48 +674,72 @@ fun TrackingScreen(ringViewModel: RingViewModel) {
                     }
                 )
 
-                // Heart Rate
-                BiometricCard(
-                    title = "Heart Rate",
-                    value = if (bpm > 0) "$bpm BPM" else "--",
-                    icon = "❤️",
-                    color = Color.Red,
-                    valueColor = when (bpm) {
-                        in 60..100 -> Color(0xFF4CAF50)
-                        in 101..120 -> Color(0xFFFF9800)
-                        else -> Color(0xFFF44336)
-                    }
+                // Data View Selector at top
+                DataViewSelector(
+                    selectedView = selectedView,
+                    onViewSelected = { selectedView = it }
                 )
 
-                // SpO2
-                BiometricCard(
-                    title = "Blood Oxygen",
-                    value = if (spo2 > 0) "$spo2%" else "--",
-                    icon = "💧",
-                    color = Color(0xFF2196F3),
-                    valueColor = when (spo2) {
-                        in 95..100 -> Color(0xFF4CAF50)
-                        in 90..94 -> Color(0xFFFF9800)
-                        else -> Color(0xFFF44336)
+// Show different content based on selection
+                when (selectedView) {
+                    DataView.RAW_SENSOR -> {
+                        // Show all 3 raw data cards
+                        AccelerometerCard(x = accelX, y = accelY, z = accelZ)
+                        PpgCard(raw = rawPpg, max = rawPpgMax, min = rawPpgMin, diff = rawPpgDiff)
+                        RawSpO2Card(
+                            bloodRaw = rawSpO2Signal,
+                            peaks = listOf(rawSpO2Peak1, rawSpO2Peak2, rawSpO2Peak3)
+                        )
                     }
-                )
+                    DataView.HEART_RATE -> {
+                        // Show heart rate card
+                        BiometricCard(
+                            title = "Heart Rate",
+                            value = if (bpm > 0) "$bpm BPM" else "--",
+                            icon = "❤️",
+                            color = Color.Red,
+                            valueColor = when (bpm) {
+                                in 60..100 -> Color(0xFF4CAF50)
+                                in 101..120 -> Color(0xFFFF9800)
+                                else -> Color(0xFFF44336)
+                            }
+                        )
+                    }
+                    DataView.SPO2 -> {
+                        // Show SpO2 card
+                        BiometricCard(
+                            title = "Blood Oxygen",
+                            value = if (spo2 > 0) "$spo2%" else "--",
+                            icon = "💧",
+                            color = Color(0xFF2196F3),
+                            valueColor = when (spo2) {
+                                in 95..100 -> Color(0xFF4CAF50)
+                                in 90..94 -> Color(0xFFFF9800)
+                                else -> Color(0xFFF44336)
+                            }
+                        )
+                    }
+                    DataView.STRESS -> {
+                        // Show stress card
+                        BiometricCard(
+                            title = "Stress Level",
+                            value = if (stress > 0) "$stress" else "--",
+                            icon = "🧘",
+                            color = Color(0xFFFF9800),
+                            valueColor = when (stress) {
+                                in 0..30 -> Color(0xFF4CAF50)
+                                in 31..60 -> Color(0xFFFF9800)
+                                else -> Color(0xFFF44336)
+                            }
+                        )
+                    }
+                }
 
-                // Stress
-                BiometricCard(
-                    title = "Stress Level",
-                    value = if (stress > 0) "$stress" else "--",
-                    icon = "🧘",
-                    color = Color(0xFFFF9800),
-                    valueColor = when (stress) {
-                        in 0..30 -> Color(0xFF4CAF50)
-                        in 31..60 -> Color(0xFFFF9800)
-                        else -> Color(0xFFF44336)
-                    }
-                )
-                SleepCard(sleepRecord)
-                SleepHistoryCard(sleepHistory)
                 Button(
-                    onClick = { manager.disconnect() },
+                    onClick = {
+                                manager.disableAllRawData()
+                                manager.disconnect()
+                              },
                     modifier = Modifier.padding(bottom = 16.dp)
                 ) {
                     Text("Disconnect")
