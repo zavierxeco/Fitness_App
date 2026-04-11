@@ -65,6 +65,15 @@ fun BasicnavApp() {
             }
         }
     )
+    val fitnessPlanViewModel: FitnessPlanViewModel = viewModel()
+    val chatViewModel: ChatbotViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return ChatbotViewModel(fitnessPlanViewModel) as T
+            }
+        }
+    )
     var currentScreen by rememberSaveable { mutableStateOf(0) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -90,10 +99,10 @@ fun BasicnavApp() {
         Box(modifier = Modifier.weight(1f)) {
             when (currentScreen) {
                 0 -> TrackingScreen(ringViewModel)
-                1 -> GoalsScreen()
+                1 -> GoalsScreen(fitnessPlanViewModel = fitnessPlanViewModel)
                 2 -> ProfileScreen()
                 3 -> DebugScreen()
-                4 -> ChatbotScreen()
+                4 -> ChatbotScreen(viewModel = chatViewModel)
             }
         }
 

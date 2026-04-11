@@ -8,6 +8,8 @@ import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +26,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
-
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -44,12 +46,7 @@ import androidx.compose.ui.unit.sp
 
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.layout.aspectRatio
@@ -60,24 +57,26 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
-import java.io.File
-import java.io.FileOutputStream
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
-fun GoalsScreen() {
+fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
+    val plan by fitnessPlanViewModel.plan.collectAsStateWithLifecycle()
+    /** Snapshot so the compiler can smart-cast (delegated `plan` cannot). */
+    val activePlan = plan
+    val completedDates by fitnessPlanViewModel.completedDates.collectAsStateWithLifecycle()
+
     // Target state
     var targetType by rememberSaveable { mutableStateOf("Weight Loss") }
     var targetWeight by rememberSaveable { mutableStateOf("") }
     var targetDateText by rememberSaveable { mutableStateOf("") } // format: yyyy-MM-dd
     var isTargetDialogOpen by rememberSaveable { mutableStateOf(false) }
 
-    // Simple state to represent whether today's workout is done
-    var workoutCompletedToday by rememberSaveable { mutableStateOf(false) }
-
     // Helpers for date/calendar
     val dateFormatter = remember { DateTimeFormatter.ISO_LOCAL_DATE }
     val today = remember { LocalDate.now() }
+    val scroll = rememberScrollState()
 
     val parsedTargetDate: LocalDate? = remember(targetDateText) {
         if (targetDateText.isBlank()) null
@@ -93,6 +92,7 @@ fun GoalsScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(scroll)
             .padding(16.dp)
     ) {
         // Screen title (also appears in top bar, but emphasized here as requested)
@@ -250,12 +250,60 @@ fun GoalsScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Cheering message
+        // --- AI-imported plan (from chat) ---
+        if (activePlan != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "Plan from AI Coach",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "${activePlan.startDate.format(dateFormatter)} → ${activePlan.endDate.format(dateFormatter)}",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                activePlan.templates.forEach { t ->
+                    Text(
+                        text = t.dayGroupLabel,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        text = t.objective,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+        } else {
+            Text(
+                text = "Ask the AI Coach for a workout plan; your weekly objectives and schedule will appear here.",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+        }
+
+        // Today's focus
+        val todayDone = activePlan != null && today in completedDates
+        val todayObjective = activePlan?.objectiveOn(today)
         Text(
-            text = if (true/*workoutCompletedToday*/) {
-                "Well Done! You've completed the workout today."
-            } else {
-                "You have some workout to do today. Come on. Let's go!!"
+            text = when {
+                activePlan == null -> "Set a goal above, then chat with AI Coach for a personalized plan."
+                todayDone -> "Well done — you logged today's workout."
+                todayObjective != null -> "Today's focus: $todayObjective"
+                else -> "You're all set for today."
             },
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
@@ -264,11 +312,19 @@ fun GoalsScreen() {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Simple toggle button to mark today's workout (for demo purposes)
-        OutlinedButton(onClick = { workoutCompletedToday = !workoutCompletedToday }) {
-            Text(
-                text = if (workoutCompletedToday) "Mark as not done" else "Mark today's workout as done"
-            )
+        if (activePlan != null) {
+            OutlinedButton(
+                onClick = { fitnessPlanViewModel.toggleDateCompleted(today) },
+                enabled = today >= activePlan.startDate && today <= activePlan.endDate
+            ) {
+                Text(
+                    text = if (todayDone) "Undo today's log" else "Mark today's workout as done"
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            TextButton(onClick = { fitnessPlanViewModel.clearPlan() }) {
+                Text("Clear imported plan", fontSize = 13.sp)
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -279,16 +335,26 @@ fun GoalsScreen() {
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold
         )
+        Text(
+            text = "Highlighted days follow your AI plan (or your target date if no plan). Tap a highlighted day to log or unlog.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Scrollable calendar: browse other months, highlight from today -> target date
-        Box(modifier = Modifier.weight(1f)) {
-            ScrollableCalendar(
-                today = today,
-                highlightUntil = parsedTargetDate
-            )
-        }
+        ScrollableCalendar(
+            today = today,
+            manualHighlightFrom = today,
+            manualHighlightUntil = parsedTargetDate,
+            planStart = activePlan?.startDate,
+            planEnd = activePlan?.endDate,
+            completedDates = completedDates,
+            onDayClick = { d -> fitnessPlanViewModel.toggleDateCompleted(d) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(420.dp)
+        )
     }
 }
 
@@ -323,8 +389,12 @@ private fun GoalTypeChip(
 @Composable
 private fun CalendarMonthView(
     month: YearMonth,
-    highlightFrom: LocalDate?,
-    highlightUntil: LocalDate?
+    manualHighlightFrom: LocalDate?,
+    manualHighlightUntil: LocalDate?,
+    planStart: LocalDate?,
+    planEnd: LocalDate?,
+    completedDates: Set<LocalDate>,
+    onDayClick: (LocalDate) -> Unit
 ) {
     val firstOfMonth = month.atDay(1)
     val daysInMonth = month.lengthOfMonth()
@@ -397,24 +467,38 @@ private fun CalendarMonthView(
                         )
                     } else {
                         val currentDate = month.atDay(dayCounter)
-                        val isHighlighted =
-                            highlightFrom != null &&
-                                    highlightUntil != null &&
-                                    !highlightUntil.isBefore(highlightFrom) &&
-                                    !currentDate.isBefore(highlightFrom) &&
-                                    !currentDate.isAfter(highlightUntil)
+                        val inPlanRange = planStart != null && planEnd != null &&
+                            !currentDate.isBefore(planStart) && !currentDate.isAfter(planEnd)
+                        val inManualRange = manualHighlightFrom != null && manualHighlightUntil != null &&
+                            !manualHighlightUntil.isBefore(manualHighlightFrom) &&
+                            !currentDate.isBefore(manualHighlightFrom) &&
+                            !currentDate.isAfter(manualHighlightUntil)
+                        val isHighlighted = when {
+                            planStart != null && planEnd != null -> inPlanRange
+                            else -> inManualRange
+                        }
+                        val isDone = currentDate in completedDates
+                        val clickable = isHighlighted
 
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(2.dp)
                                 .aspectRatio(1f)
+                                .clip(RoundedCornerShape(6.dp))
                                 .background(
-                                    color = if (isHighlighted)
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
-                                    else
-                                        Color.Transparent,
+                                    color = when {
+                                        isDone && isHighlighted ->
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.42f)
+                                        isHighlighted ->
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                        else -> Color.Transparent
+                                    },
                                     shape = RoundedCornerShape(6.dp)
+                                )
+                                .clickable(
+                                    enabled = clickable,
+                                    onClick = { onDayClick(currentDate) }
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
@@ -441,12 +525,18 @@ private fun CalendarMonthView(
 @Composable
 private fun ScrollableCalendar(
     today: LocalDate,
-    highlightUntil: LocalDate?
+    manualHighlightFrom: LocalDate?,
+    manualHighlightUntil: LocalDate?,
+    planStart: LocalDate?,
+    planEnd: LocalDate?,
+    completedDates: Set<LocalDate>,
+    onDayClick: (LocalDate) -> Unit,
+    modifier: Modifier = Modifier
 ) {
+    val rangeEnd = planEnd ?: manualHighlightUntil
     val startMonth = remember(today) { YearMonth.from(today).minusMonths(12) }
-    val endMonth = remember(today, highlightUntil) {
-        val base = highlightUntil?.let { YearMonth.from(it) } ?: YearMonth.from(today)
-        // Let user browse beyond the target month as well
+    val endMonth = remember(today, rangeEnd) {
+        val base = rangeEnd?.let { YearMonth.from(it) } ?: YearMonth.from(today)
         base.plusMonths(12)
     }
 
@@ -459,15 +549,19 @@ private fun ScrollableCalendar(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier,
         state = listState,
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         items(months) { month ->
             CalendarMonthView(
                 month = month,
-                highlightFrom = today,
-                highlightUntil = highlightUntil
+                manualHighlightFrom = manualHighlightFrom,
+                manualHighlightUntil = manualHighlightUntil,
+                planStart = planStart,
+                planEnd = planEnd,
+                completedDates = completedDates,
+                onDayClick = onDayClick
             )
         }
     }
