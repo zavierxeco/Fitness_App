@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 
@@ -106,11 +107,12 @@ fun BasicnavApp() {
             }
         }
 
-        // Bottom navigation (simple row)
+        // Bottom navigation (simple row); inset above system 3-button / gesture nav bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color.LightGray)
+                .navigationBarsPadding()
                 .padding(8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
