@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 /**
  * Holds chat state for the lifetime of the activity so switching tabs does not clear history.
@@ -64,9 +66,15 @@ class ChatbotViewModel(
 
         viewModelScope.launch {
             try {
-                val response = chatbotService.sendMessage(historySnapshot)
+                val today = LocalDate.now()
+                val apiContext = ChatApiContext(
+                    todayDayOfWeek = today.dayOfWeek,
+                    todayIsoDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE),
+                    savedPlanRaw = fitnessPlanViewModel.savedPlanRawForApi()
+                )
+                val response = chatbotService.sendMessage(historySnapshot, apiContext)
                 _messages.update { it + ChatMessage(text = response, isUser = false) }
-                if (FitnessPlanParser.parse(response) != null) {
+                if (FitnessPlanParser.looksLikeFitnessPlan(response)) {
                     pendingPlanText = response
                     _messages.update {
                         it + ChatMessage(
@@ -87,14 +95,18 @@ class ChatbotViewModel(
 
     fun onCommitPlanYes() {
         val plan = pendingPlanText ?: return
-        fitnessPlanViewModel.tryImportFromAssistantResponse(plan)
         pendingPlanText = null
+        val saved = fitnessPlanViewModel.tryImportFromAssistantResponse(plan)
         _messages.update { list ->
-            list.filterNot { it.isCommitPrompt } +
-                ChatMessage(
-                    text = "Done — this plan is saved to your Goals tab.",
-                    isUser = false
-                )
+            val withoutPrompt = list.filterNot { it.isCommitPrompt }
+            withoutPrompt + ChatMessage(
+                text = if (saved) {
+                    "Done — this plan is saved to your Goals tab."
+                } else {
+                    "That message didn't contain a plan I could import yet. Ask for a clear week-by-week schedule with lines like \"Monday: …\" for each day, then try saving again."
+                },
+                isUser = false
+            )
         }
     }
 

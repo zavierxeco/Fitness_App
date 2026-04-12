@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,7 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -53,6 +54,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -65,7 +67,9 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
     val plan by fitnessPlanViewModel.plan.collectAsStateWithLifecycle()
     /** Snapshot so the compiler can smart-cast (delegated `plan` cannot). */
     val activePlan = plan
-    val completedDates by fitnessPlanViewModel.completedDates.collectAsStateWithLifecycle()
+    val completedItems by fitnessPlanViewModel.completedItems.collectAsStateWithLifecycle()
+
+    var selectedWorkoutDateStr by rememberSaveable { mutableStateOf("") }
 
     // Target state
     var targetType by rememberSaveable { mutableStateOf("Weight Loss") }
@@ -87,6 +91,36 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
                 null
             }
         }
+    }
+
+    val selectedWorkoutDate: LocalDate = remember(selectedWorkoutDateStr) {
+        if (selectedWorkoutDateStr.isBlank()) today
+        else {
+            try {
+                LocalDate.parse(selectedWorkoutDateStr, dateFormatter)
+            } catch (_: DateTimeParseException) {
+                today
+            }
+        }
+    }
+
+    LaunchedEffect(activePlan?.rawSourceText) {
+        val p = activePlan ?: return@LaunchedEffect
+        val now = LocalDate.now()
+        selectedWorkoutDateStr = now.coerceIn(p.startDate, p.endDate).format(dateFormatter)
+    }
+
+    LaunchedEffect(activePlan?.startDate, activePlan?.endDate, selectedWorkoutDateStr) {
+        val p = activePlan ?: return@LaunchedEffect
+        if (selectedWorkoutDateStr.isBlank()) {
+            selectedWorkoutDateStr =
+                LocalDate.now().coerceIn(p.startDate, p.endDate).format(dateFormatter)
+            return@LaunchedEffect
+        }
+        val d = runCatching { LocalDate.parse(selectedWorkoutDateStr, dateFormatter) }.getOrNull()
+            ?: return@LaunchedEffect
+        val c = d.coerceIn(p.startDate, p.endDate)
+        if (c != d) selectedWorkoutDateStr = c.format(dateFormatter)
     }
 
     Column(
@@ -250,7 +284,78 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- AI-imported plan (from chat) ---
+        val effectiveWorkoutDate = remember(activePlan, selectedWorkoutDate) {
+            if (activePlan == null) selectedWorkoutDate
+            else selectedWorkoutDate.coerceIn(activePlan.startDate, activePlan.endDate)
+        }
+
+        // Selected day checklist — directly under Target, before the plan summary
+        Text(
+            text = when {
+                activePlan == null -> "Workout checklist"
+                effectiveWorkoutDate == LocalDate.now() -> "Today's workout"
+                else -> "Workout for ${effectiveWorkoutDate.format(dateFormatter)}"
+            },
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Start
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (activePlan == null) {
+            Text(
+                text = "Set a goal above, then chat with AI Coach for a personalized plan.",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else if (effectiveWorkoutDate >= activePlan.startDate && effectiveWorkoutDate <= activePlan.endDate) {
+            val itemsForDay = activePlan.itemsForDate(effectiveWorkoutDate)
+            val doneSet = completedItems[effectiveWorkoutDate].orEmpty()
+            if (itemsForDay.isEmpty()) {
+                Text(
+                    text = "No specific items for this day — ${activePlan.objectiveOn(effectiveWorkoutDate)}",
+                    fontSize = 14.sp
+                )
+            } else {
+                itemsForDay.forEach { item ->
+                    val checked = item.id in doneSet
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = checked,
+                            onCheckedChange = {
+                                fitnessPlanViewModel.toggleItemCompleted(effectiveWorkoutDate, item.id)
+                            }
+                        )
+                        Text(
+                            text = item.text,
+                            fontSize = 14.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                if (itemsForDay.isNotEmpty() && itemsForDay.all { it.id in doneSet }) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Nice work — you logged everything for this day.",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            TextButton(onClick = { fitnessPlanViewModel.clearPlan() }) {
+                Text("Clear imported plan", fontSize = 13.sp)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Plan card: phase that contains the selected calendar day, with phase date range
         if (activePlan != null) {
             Column(
                 modifier = Modifier
@@ -267,22 +372,74 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "${activePlan.startDate.format(dateFormatter)} → ${activePlan.endDate.format(dateFormatter)}",
+                    text = "Overall: ${activePlan.startDate.format(dateFormatter)} → ${activePlan.endDate.format(dateFormatter)}",
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                activePlan.templates.forEach { t ->
+                val phase = activePlan.phaseForDate(effectiveWorkoutDate)
+                if (phase != null) {
+                    val phaseIdx = activePlan.phaseIndexForDate(effectiveWorkoutDate)
+                    val phaseStart = activePlan.phaseStartDate(phaseIdx)
+                    val phaseEnd = activePlan.phaseEndDate(phaseIdx)
                     Text(
-                        text = t.dayGroupLabel,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 15.sp
+                        text = "Phase for selected day",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = t.objective,
+                        text = phase.title,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Text(
+                        text = "${phaseStart.format(dateFormatter)} → ${phaseEnd.format(dateFormatter)}",
                         fontSize = 14.sp,
-                        modifier = Modifier.padding(bottom = 10.dp)
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
                     )
+                    val dayOrder = listOf(
+                        DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY,
+                        DayOfWeek.THURSDAY, DayOfWeek.FRIDAY, DayOfWeek.SATURDAY, DayOfWeek.SUNDAY
+                    )
+                    for (dow in dayOrder) {
+                        val items = phase.dayEntries[dow.name].orEmpty()
+                        if (items.isEmpty()) continue
+                        Text(
+                            text = dow.name.lowercase().replaceFirstChar { it.titlecase() },
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp
+                        )
+                        items.forEach { w ->
+                            Text(
+                                text = "• ${w.text}",
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+                } else if (activePlan.templates.isNotEmpty()) {
+                    Text(
+                        text = "Weekly schedule (imported as repeating template)",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    activePlan.templates.forEach { t ->
+                        Text(
+                            text = t.dayGroupLabel,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp
+                        )
+                        Text(
+                            text = t.objective,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(bottom = 10.dp)
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(20.dp))
@@ -295,38 +452,6 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
             Spacer(modifier = Modifier.height(20.dp))
         }
 
-        // Today's focus
-        val todayDone = activePlan != null && today in completedDates
-        val todayObjective = activePlan?.objectiveOn(today)
-        Text(
-            text = when {
-                activePlan == null -> "Set a goal above, then chat with AI Coach for a personalized plan."
-                todayDone -> "Well done — you logged today's workout."
-                todayObjective != null -> "Today's focus: $todayObjective"
-                else -> "You're all set for today."
-            },
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Start
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (activePlan != null) {
-            OutlinedButton(
-                onClick = { fitnessPlanViewModel.toggleDateCompleted(today) },
-                enabled = today >= activePlan.startDate && today <= activePlan.endDate
-            ) {
-                Text(
-                    text = if (todayDone) "Undo today's log" else "Mark today's workout as done"
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            TextButton(onClick = { fitnessPlanViewModel.clearPlan() }) {
-                Text("Clear imported plan", fontSize = 13.sp)
-            }
-        }
-
         Spacer(modifier = Modifier.height(24.dp))
 
         // Calendar section
@@ -336,7 +461,7 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = "Highlighted days follow your AI plan (or your target date if no plan). Tap a highlighted day to log or unlog.",
+            text = "Highlighted days follow your AI plan (or your target date if no plan). Tap a day to update the checklist above and the phase shown in the plan.",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -349,8 +474,11 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
             manualHighlightUntil = parsedTargetDate,
             planStart = activePlan?.startDate,
             planEnd = activePlan?.endDate,
-            completedDates = completedDates,
-            onDayClick = { d -> fitnessPlanViewModel.toggleDateCompleted(d) },
+            selectedDate = activePlan?.let { effectiveWorkoutDate },
+            dayAllItemsDone = { d ->
+                activePlan?.allItemsCompleted(d, completedItems[d].orEmpty()) == true
+            },
+            onDayClick = { d -> selectedWorkoutDateStr = d.format(dateFormatter) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(420.dp)
@@ -393,7 +521,8 @@ private fun CalendarMonthView(
     manualHighlightUntil: LocalDate?,
     planStart: LocalDate?,
     planEnd: LocalDate?,
-    completedDates: Set<LocalDate>,
+    selectedDate: LocalDate?,
+    dayAllItemsDone: (LocalDate) -> Boolean,
     onDayClick: (LocalDate) -> Unit
 ) {
     val firstOfMonth = month.atDay(1)
@@ -477,8 +606,9 @@ private fun CalendarMonthView(
                             planStart != null && planEnd != null -> inPlanRange
                             else -> inManualRange
                         }
-                        val isDone = currentDate in completedDates
+                        val isDone = dayAllItemsDone(currentDate)
                         val clickable = isHighlighted
+                        val isSelected = selectedDate != null && currentDate == selectedDate
 
                         Box(
                             modifier = Modifier
@@ -486,6 +616,11 @@ private fun CalendarMonthView(
                                 .padding(2.dp)
                                 .aspectRatio(1f)
                                 .clip(RoundedCornerShape(6.dp))
+                                .border(
+                                    width = if (isSelected) 2.dp else 0.dp,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    shape = RoundedCornerShape(6.dp)
+                                )
                                 .background(
                                     color = when {
                                         isDone && isHighlighted ->
@@ -529,7 +664,8 @@ private fun ScrollableCalendar(
     manualHighlightUntil: LocalDate?,
     planStart: LocalDate?,
     planEnd: LocalDate?,
-    completedDates: Set<LocalDate>,
+    selectedDate: LocalDate?,
+    dayAllItemsDone: (LocalDate) -> Boolean,
     onDayClick: (LocalDate) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -560,7 +696,8 @@ private fun ScrollableCalendar(
                 manualHighlightUntil = manualHighlightUntil,
                 planStart = planStart,
                 planEnd = planEnd,
-                completedDates = completedDates,
+                selectedDate = selectedDate,
+                dayAllItemsDone = dayAllItemsDone,
                 onDayClick = onDayClick
             )
         }

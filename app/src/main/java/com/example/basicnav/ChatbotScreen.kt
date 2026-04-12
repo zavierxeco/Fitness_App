@@ -31,6 +31,15 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
+import java.time.DayOfWeek
+import java.time.LocalDate
+
+data class ChatApiContext(
+    val todayDayOfWeek: DayOfWeek,
+    val todayIsoDate: String,
+    /** Full raw text of the plan saved on Goals, if any. */
+    val savedPlanRaw: String?
+)
 
 data class ChatMessage(
     val text: String,
@@ -67,13 +76,14 @@ class ChatbotService {
         return true
     }
 
-    suspend fun sendMessage(conversation: List<ChatMessage>): String = withContext(Dispatchers.IO) {
+    suspend fun sendMessage(conversation: List<ChatMessage>, apiContext: ChatApiContext): String = withContext(Dispatchers.IO) {
         try {
+            val systemContent = buildSystemPrompt(apiContext)
             val messagesJson = org.json.JSONArray().apply {
                 put(
                     JSONObject().apply {
                         put("role", "system")
-                        put("content", SYSTEM_PROMPT)
+                        put("content", systemContent)
                     }
                 )
                 conversation.filter(::includeInApiHistory).forEach { m ->
@@ -143,19 +153,31 @@ class ChatbotService {
         }
     }
 
-    private companion object {
-        val SYSTEM_PROMPT = """
+    private fun buildSystemPrompt(ctx: ChatApiContext): String {
+        val dow = ctx.todayDayOfWeek.name.lowercase().replaceFirstChar { it.titlecase() }
+        val timeCtx = "\n\n[App context] Today is $dow (${ctx.todayIsoDate}). When you give a weekly workout schedule, list days in order starting from **$dow** as day 1 of the week (then the following six days), not always Monday-first, unless the user explicitly wants Monday-start."
+        val planCtx = ctx.savedPlanRaw?.takeIf { it.isNotBlank() }?.let { raw ->
+            "\n\n[User's current plan saved in Goals — read and follow this when they ask to adjust, tweak, replace, or continue the plan.]\n" +
+                raw.take(14_000)
+        }.orEmpty()
+        return SYSTEM_PROMPT_BASE + timeCtx + planCtx
+    }
+
+    private val SYSTEM_PROMPT_BASE = """
             You are an AI fitness coach. Be encouraging and practical.
             For quick questions, keep answers brief.
             When the user asks for a workout or nutrition plan, a program, or goals over weeks/months,
-            respond with a clear structured plan (sections/bullet points are fine). Do not refuse solely
-            because the answer is longer. Remind users to consult a doctor for medical conditions.
-            For weekly schedules, put each day on its own line with a clear label, e.g. "Mon/Wed/Fri: ...",
-            or full names like "Monday: ...", "Thursday: ...". Mention the planned duration in weeks or months
-            (e.g. "12 weeks", "in one month") or a target end date YYYY-MM-DD so the app can track it.
+            give a concrete, actionable plan. Remind users to consult a doctor for medical conditions.
+
+            Workout detail rules:
+            - For countable strength moves (push-ups, squats, rows, etc.), always specify sets × reps (e.g. "3 × 12 push-ups") and list **each exercise on its own bullet line**.
+            - For time-based work (cardio, HIIT, steady run, yoga, walking), always give a clear duration per session (e.g. "30 minutes LISS", "20 minutes HIIT: 30s on / 30s off").
+            - For each calendar day in the schedule, list that day's work under a line starting with the weekday and a colon, e.g. "Thursday: ...".
+
+            Multi-week plans: use clear phase headers such as "Week 1: ...", "Week 2: ..." (each week may change workouts). Mention total duration in weeks/months or an end date YYYY-MM-DD.
+
             Do not ask whether to save the plan to Goals; the app shows its own prompt after your reply.
         """.trimIndent()
-    }
 }
 
 @Composable

@@ -1,5 +1,6 @@
 package com.example.basicnav
 
+import android.app.Application
 import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -66,7 +67,15 @@ fun BasicnavApp() {
             }
         }
     )
-    val fitnessPlanViewModel: FitnessPlanViewModel = viewModel()
+    val fitnessPlanViewModel: FitnessPlanViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val app = context.applicationContext as Application
+                return FitnessPlanViewModel(app) as T
+            }
+        }
+    )
     val chatViewModel: ChatbotViewModel = viewModel(
         factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -107,7 +116,7 @@ fun BasicnavApp() {
             }
         }
 
-        // Bottom navigation (simple row); inset above system 3-button / gesture nav bar
+        // Bottom navigation (simple row)
         Row(
             modifier = Modifier
                 .fillMaxWidth()

@@ -1,41 +1,65 @@
 package com.example.basicnav
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.time.LocalDate
 
-class FitnessPlanViewModel : ViewModel() {
+class FitnessPlanViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val repository = FitnessPlanRepository(application)
 
     private val _plan = MutableStateFlow<ParsedFitnessPlan?>(null)
     val plan: StateFlow<ParsedFitnessPlan?> = _plan.asStateFlow()
 
-    /** Dates the user marked as having completed that day's objective. */
-    private val _completedDates = MutableStateFlow<Set<LocalDate>>(emptySet())
-    val completedDates: StateFlow<Set<LocalDate>> = _completedDates.asStateFlow()
+    /** Per-date set of completed workout item ids. */
+    private val _completedItems = MutableStateFlow<Map<LocalDate, Set<String>>>(emptyMap())
+    val completedItems: StateFlow<Map<LocalDate, Set<String>>> = _completedItems.asStateFlow()
 
-    /**
-     * Called when the AI returns a new message. If the text looks like a workout plan,
-     * replaces the current plan and clears completion marks.
-     */
-    fun tryImportFromAssistantResponse(assistantText: String) {
-        val parsed = FitnessPlanParser.parse(assistantText) ?: return
+    init {
+        _plan.value = repository.loadPlan()
+        _completedItems.value = repository.loadCompletedItems()
+    }
+
+    private fun persist() {
+        repository.save(_plan.value, _completedItems.value)
+    }
+
+    /** @return true if a structured plan was saved */
+    fun tryImportFromAssistantResponse(assistantText: String): Boolean {
+        val parsed = FitnessPlanParser.parse(assistantText) ?: return false
         _plan.value = parsed
-        _completedDates.value = emptySet()
+        _completedItems.value = emptyMap()
+        persist()
+        return true
     }
 
-    fun toggleDateCompleted(date: LocalDate) {
-        _completedDates.update { current ->
-            if (date in current) current - date else current + date
+    fun toggleItemCompleted(date: LocalDate, itemId: String) {
+        _completedItems.update { current ->
+            val set = current[date].orEmpty()
+            val next = if (itemId in set) set - itemId else set + itemId
+            if (next.isEmpty()) current - date else current + (date to next)
         }
+        persist()
     }
 
-    fun isCompleted(date: LocalDate): Boolean = date in _completedDates.value
+    fun isItemCompleted(date: LocalDate, itemId: String): Boolean =
+        itemId in _completedItems.value[date].orEmpty()
+
+    fun dayCompletionState(date: LocalDate): Boolean {
+        val p = _plan.value ?: return false
+        return p.allItemsCompleted(date, _completedItems.value[date].orEmpty())
+    }
 
     fun clearPlan() {
         _plan.value = null
-        _completedDates.value = emptySet()
+        _completedItems.value = emptyMap()
+        persist()
     }
+
+    /** Text injected into the chat system prompt when the user may want to adjust the saved plan. */
+    fun savedPlanRawForApi(): String? = _plan.value?.rawSourceText?.takeIf { it.isNotBlank() }
 }
