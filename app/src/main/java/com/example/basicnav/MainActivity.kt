@@ -1,11 +1,13 @@
 package com.example.basicnav
 
+import android.app.Application
 import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 
@@ -65,6 +67,23 @@ fun BasicnavApp() {
             }
         }
     )
+    val fitnessPlanViewModel: FitnessPlanViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val app = context.applicationContext as Application
+                return FitnessPlanViewModel(app) as T
+            }
+        }
+    )
+    val chatViewModel: ChatbotViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return ChatbotViewModel(fitnessPlanViewModel) as T
+            }
+        }
+    )
     var currentScreen by rememberSaveable { mutableStateOf(0) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -90,10 +109,10 @@ fun BasicnavApp() {
         Box(modifier = Modifier.weight(1f)) {
             when (currentScreen) {
                 0 -> TrackingScreen(ringViewModel)
-                1 -> GoalsScreen()
+                1 -> GoalsScreen(fitnessPlanViewModel = fitnessPlanViewModel)
                 2 -> ProfileScreen()
                 3 -> DebugScreen()
-                4 -> ChatbotScreen()
+                4 -> ChatbotScreen(viewModel = chatViewModel)
             }
         }
 
@@ -102,6 +121,7 @@ fun BasicnavApp() {
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color.LightGray)
+                .navigationBarsPadding()
                 .padding(8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
