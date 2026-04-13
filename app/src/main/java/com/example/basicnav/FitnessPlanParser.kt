@@ -27,19 +27,53 @@ data class WeekdayObjectiveTemplate(
     val objective: String
 )
 
+data class NutritionTargets(
+    /** Daily kcal target (max of a range if provided). */
+    val caloriesKcal: Int? = null,
+    /** If present, protein target in g/kg/day (can be converted to grams using user weight). */
+    val proteinGPerKg: Double? = null,
+    /** Daily protein target in grams (if explicitly provided). */
+    val proteinGrams: Int? = null,
+    /** Daily water target in liters. */
+    val waterLiters: Double? = null
+)
+
 data class ParsedFitnessPlan(
     val startDate: LocalDate,
     val endDate: LocalDate,
     val phases: List<PlanPhase>,
     val templates: List<WeekdayObjectiveTemplate>,
     /** Full assistant message — sent back to the model when the user asks for adjustments. */
-    val rawSourceText: String
+    val rawSourceText: String,
+    val nutritionTargets: NutritionTargets? = null
 ) {
+    private fun weeksSpanFromTitle(title: String): Int? {
+        // Examples we want to catch:
+        // "Phase 1: ... (Weeks 1–2)", "Phase 2 ... (Week 3-4)", "Week 1: ..." (implies 1)
+        val rx = Regex("""\(\s*Weeks?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*\)""", RegexOption.IGNORE_CASE)
+        val m = rx.find(title) ?: return null
+        val a = m.groupValues[1].toIntOrNull() ?: return null
+        val b = m.groupValues[2].toIntOrNull() ?: return null
+        if (a <= 0 || b <= 0 || b < a) return null
+        val span = (b - a) + 1
+        return span.takeIf { it in 1..52 }
+    }
+
+    private fun phaseDurationWeeks(phaseIndex: Int): Int =
+        weeksSpanFromTitle(phases.getOrNull(phaseIndex)?.title.orEmpty()) ?: 1
+
     fun phaseIndexForDate(date: LocalDate): Int {
         if (phases.isEmpty()) return 0
         val days = ChronoUnit.DAYS.between(startDate, date).toInt().coerceAtLeast(0)
-        val idx = days / 7
-        return idx.coerceIn(0, phases.lastIndex)
+        val weekNumber = (days / 7) + 1 // 1-based
+        var cursorWeek = 1
+        for (i in phases.indices) {
+            val len = phaseDurationWeeks(i)
+            val endWeek = cursorWeek + len - 1
+            if (weekNumber in cursorWeek..endWeek) return i
+            cursorWeek += len
+        }
+        return phases.lastIndex
     }
 
     fun phaseForDate(date: LocalDate): PlanPhase? =
@@ -47,11 +81,13 @@ data class ParsedFitnessPlan(
 
     /** Inclusive first day of the phase week (aligned to [startDate]). */
     fun phaseStartDate(phaseIndex: Int): LocalDate =
-        startDate.plusDays(phaseIndex * 7L)
+        startDate.plusDays(
+            (0 until phaseIndex).sumOf { phaseDurationWeeks(it) }.toLong() * 7L
+        )
 
     /** Inclusive last day of the phase week, clamped to [endDate]. */
     fun phaseEndDate(phaseIndex: Int): LocalDate {
-        val weekEnd = phaseStartDate(phaseIndex).plusDays(6)
+        val weekEnd = phaseStartDate(phaseIndex).plusDays((phaseDurationWeeks(phaseIndex) * 7L) - 1L)
         return if (weekEnd.isAfter(endDate)) endDate else weekEnd
     }
 
@@ -89,7 +125,9 @@ object FitnessPlanParser {
         Regex("""in\s+about\s+(\d+)\s+weeks?""", RegexOption.IGNORE_CASE),
         Regex("""(?:reach|goal)\s+[^.\n]{0,40}?\s+in\s+about\s+(\d+)\s+weeks?""", RegexOption.IGNORE_CASE),
         Regex("""(?:in|within|for|over)\s+(\d+)\s+weeks?""", RegexOption.IGNORE_CASE),
-        Regex("""about\s+(\d+)\s+weeks?""", RegexOption.IGNORE_CASE)
+        Regex("""about\s+(\d+)\s+weeks?""", RegexOption.IGNORE_CASE),
+        // Matches titles like "The Plan: 4-Week Intensive Transformation"
+        Regex("""(?:the\s+plan\s*[:\-–]?\s*)?(\d{1,2})\s*-\s*weeks?\b""", RegexOption.IGNORE_CASE)
     )
     private val weeksInParens = Regex("""\(\s*(\d+)\s+weeks?""", RegexOption.IGNORE_CASE)
     private val monthsPattern = Regex(
@@ -99,7 +137,7 @@ object FitnessPlanParser {
     private val weekdayToken =
         """(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tues?|Wed|Thu|Thur|Fri|Sat|Sun)"""
     private val dayHeaderCore = Regex(
-        "^($weekdayToken(?:\\s*[/,&]\\s*$weekdayToken)*)\\s*[:：]\\s*(.+)$",
+        "^($weekdayToken(?:\\s*[/,&]\\s*$weekdayToken)*)\\s*[:：]\\s*(.*)$",
         RegexOption.IGNORE_CASE
     )
     private val phaseHeaderRegex = Regex(
@@ -108,10 +146,17 @@ object FitnessPlanParser {
     )
     /** Multiline: any line that looks like `Monday: ...` / `Thu: ...`. */
     private val dayHeaderAnyLine = Regex(
-        """(?m)^\s*($weekdayToken(?:\s*[/,&]\s*$weekdayToken)*)\s*[:：]\s*.+""",
+        """(?m)^\s*($weekdayToken(?:\s*[/,&]\s*$weekdayToken)*)\s*[:：].*""",
         RegexOption.IGNORE_CASE
     )
     private val weekOrPhaseMention = Regex("""\b(?:week|phase)\s*\d+""", RegexOption.IGNORE_CASE)
+    private val dividerLineRegex = Regex("""^\s*(?:-{2,}|_{2,}|\*{3,})\s*$""")
+    private val caloriesTargetRegex = Regex(
+        """(?i)\b(?:calorie\s*target|calories)\b[^0-9\n]{0,40}(\d{1,3}(?:,\d{3})*)(?:\s*[–-]\s*(\d{1,3}(?:,\d{3})*))?\s*(?:kcal|cal(?:ories)?|calories)\b"""
+    )
+    private val proteinPerKgRegex = Regex("""(?i)\b(\d+(?:\.\d+)?)\s*g\s*(?:/|\s*per\s*)\s*kg\b""")
+    private val proteinTargetGramsRegex = Regex("""(?i)\bprotein\b[^0-9\n]{0,40}(\d{2,4})\s*g\b""")
+    private val waterTargetRegex = Regex("""(?i)\b(?:hydration|water)\b[^0-9\n]{0,40}(\d+(?:\.\d+)?)\s*(?:l|liters?|litres?)\b""")
 
     /**
      * Use for showing the "save to Goals?" prompt. Broader than [parse] so we still ask when the
@@ -150,10 +195,30 @@ object FitnessPlanParser {
         val templates = if (phases.isEmpty()) extractTemplates(normalized) else emptyList()
         if (phases.isEmpty() && templates.isEmpty()) return null
 
-        var endDate = inferEndDate(assistantText, planStart) ?: planStart.plusWeeks(DEFAULT_WEEKS.toLong())
+        val nutritionTargets = parseNutritionTargets(normalized)
+
+        val inferredEnd = inferEndDate(assistantText, planStart)
+        var endDate = inferredEnd ?: planStart.plusWeeks(DEFAULT_WEEKS.toLong())
+
         if (phases.isNotEmpty()) {
-            val fromPhases = planStart.plusDays((phases.size * 7L) - 1)
-            if (fromPhases.isAfter(endDate)) endDate = fromPhases
+            // Prefer the total duration described by the phase headers (supports "(Weeks 1-2)" etc.).
+            val totalWeeksFromTitles = phases.sumOf { phase ->
+                Regex("""\(\s*Weeks?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*\)""", RegexOption.IGNORE_CASE)
+                    .find(phase.title)
+                    ?.let { m ->
+                        val a = m.groupValues[1].toIntOrNull()
+                        val b = m.groupValues[2].toIntOrNull()
+                        if (a != null && b != null && a > 0 && b >= a) (b - a + 1) else null
+                    }
+                    ?: 1
+            }.coerceAtLeast(1)
+
+            val fromPhases = planStart.plusDays((totalWeeksFromTitles * 7L) - 1)
+            endDate = when {
+                inferredEnd == null -> fromPhases
+                fromPhases.isAfter(endDate) -> fromPhases
+                else -> endDate
+            }
         }
         val safeEnd = if (endDate.isBefore(planStart)) planStart.plusWeeks(DEFAULT_WEEKS.toLong()) else endDate
 
@@ -162,11 +227,40 @@ object FitnessPlanParser {
             endDate = safeEnd,
             phases = phases,
             templates = templates,
-            rawSourceText = assistantText
+            rawSourceText = assistantText,
+            nutritionTargets = nutritionTargets
         )
     }
 
     private const val DEFAULT_WEEKS = 12
+
+    private fun parseNutritionTargets(normalized: String): NutritionTargets? {
+        // Only scan the first part of the response to avoid picking up numbers from workouts.
+        val head = normalized.lines().take(120).joinToString("\n")
+
+        val calories = caloriesTargetRegex.find(head)?.let { m ->
+            val a = m.groupValues[1].replace(",", "").toIntOrNull()
+            val b = m.groupValues.getOrNull(2)?.replace(",", "")?.toIntOrNull()
+            listOfNotNull(a, b).maxOrNull()
+        }
+
+        val proteinPerKg = proteinPerKgRegex.findAll(head).mapNotNull { it.groupValues[1].toDoubleOrNull() }
+            .maxOrNull()
+
+        val proteinGrams = proteinTargetGramsRegex.findAll(head).mapNotNull { it.groupValues[1].toIntOrNull() }
+            .maxOrNull()
+
+        val water = waterTargetRegex.findAll(head).mapNotNull { it.groupValues[1].toDoubleOrNull() }
+            .maxOrNull()
+
+        val out = NutritionTargets(
+            caloriesKcal = calories,
+            proteinGPerKg = proteinPerKg,
+            proteinGrams = proteinGrams,
+            waterLiters = water
+        )
+        return if (out.caloriesKcal != null || out.proteinGPerKg != null || out.proteinGrams != null || out.waterLiters != null) out else null
+    }
 
     private fun stripMarkdownNoise(text: String): String {
         var s = text.replace(Regex("""#{1,6}\s*"""), "")
@@ -202,10 +296,11 @@ object FitnessPlanParser {
 
         for (line in lines) {
             val trimmed = line.trim()
-            val m = phaseHeaderRegex.find(trimmed)
+            val trimmedForMatch = sanitizePlanLine(trimmed)
+            val m = phaseHeaderRegex.find(trimmedForMatch)
             if (m != null) {
                 if (currentTitle != null) flushPhase()
-                currentTitle = trimmed
+                currentTitle = trimmedForMatch
             } else {
                 if (currentTitle == null) {
                     preamble.appendLine(line)
@@ -254,28 +349,33 @@ object FitnessPlanParser {
         var pendingHeader: String? = null
         val pendingBullets = mutableListOf<String>()
 
+        fun isDividerLine(raw: String): Boolean = dividerLineRegex.matches(raw.trim())
+
         fun flushDay() {
             val days = anchorDays
             val header = pendingHeader
-            if (header.isNullOrBlank() || days.isEmpty()) {
+            if (days.isEmpty() || (header.isNullOrBlank() && pendingBullets.isEmpty())) {
                 pendingBullets.clear()
                 pendingHeader = null
                 return
             }
-            val vol = extractVolumeFromHeader(header)
+            val vol = extractVolumeFromHeader(header.orEmpty())
             if (pendingBullets.isNotEmpty()) {
                 for (rawBullet in pendingBullets) {
                     val sanitized = sanitizePlanLine(rawBullet)
                     if (sanitized.length < 2) continue
+                    if (isDividerLine(rawBullet) || isDividerLine(sanitized)) continue
+                    if (looksLikeFooterText(sanitized)) continue
                     val text = mergeBulletWithVolume(sanitized, vol)
                     for (d in days) {
                         dayMap.getOrPut(d) { mutableListOf() }.add(WorkoutItem(nextId(d), text))
                     }
                 }
             } else {
-                val parts = splitObjectiveIntoItems(header)
+                val parts = splitObjectiveIntoItems(header.orEmpty())
                 for (p in parts) {
                     if (p.length < 2) continue
+                    if (isDividerLine(p) || looksLikeFooterText(p)) continue
                     for (d in days) {
                         dayMap.getOrPut(d) { mutableListOf() }.add(WorkoutItem(nextId(d), p))
                     }
@@ -288,6 +388,18 @@ object FitnessPlanParser {
         for (raw in body.lines()) {
             val line = sanitizePlanLine(raw)
             if (line.isBlank()) continue
+            if (isDividerLine(raw) || isDividerLine(line)) {
+                // Divider separates the week's schedule from any trailing prose.
+                flushDay()
+                anchorDays = emptySet()
+                pendingHeader = null
+                pendingBullets.clear()
+                continue
+            }
+            if (looksLikeFooterText(line)) {
+                // Do not treat closing encouragement as a workout item.
+                continue
+            }
 
             val dm = dayHeaderCore.find(line)
             if (dm != null) {
@@ -295,7 +407,8 @@ object FitnessPlanParser {
                 val grp = parseDayGroup(dm.groupValues[1].trim()) ?: continue
                 anchorDays = grp
                 val rest = dm.groupValues[2].trim()
-                pendingHeader = rest.ifBlank { null }
+                // Allow bare `Monday:` (no rest) — sub-lines will carry the real content.
+                pendingHeader = rest
                 continue
             }
 
@@ -329,9 +442,35 @@ object FitnessPlanParser {
         if (isContinuationLine(raw)) return true
         val t = sanitizedLine.trim()
         if (t.length < 3) return false
+        if (dividerLineRegex.matches(t)) return false
+        if (looksLikeFooterText(t)) return false
         if (dayHeaderCore.find(t) != null) return false
         if (phaseHeaderRegex.find(t.trim()) != null) return false
         return true
+    }
+
+    private fun looksLikeFooterText(sanitizedLine: String): Boolean {
+        val t = sanitizedLine.trim()
+        if (t.length < 10) return false
+        val low = t.lowercase()
+        val footerPhrases = listOf(
+            "good luck",
+            "stick to",
+            "you will see",
+            "you'll see",
+            "let me know",
+            "feel free",
+            "reach out",
+            "if you need help",
+            "if you have questions"
+        )
+        if (footerPhrases.any { low.contains(it) }) return true
+        // A pure prose line with no obvious workout signal (numbers, time units, sets×reps).
+        val hasWorkoutSignal = Regex("""\b(\d+)\b""").containsMatchIn(low) ||
+            Regex("""\b(min|mins|minute|minutes|sec|secs|second|seconds|km|mile|miles)\b""")
+                .containsMatchIn(low) ||
+            Regex("""\d+\s*[x×]\s*\d+""").containsMatchIn(low)
+        return !hasWorkoutSignal && (low.endsWith(".") || low.endsWith("!"))
     }
 
     private fun extractTemplates(normalizedFlat: String): List<WeekdayObjectiveTemplate> {
