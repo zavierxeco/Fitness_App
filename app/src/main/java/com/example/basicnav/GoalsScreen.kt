@@ -357,11 +357,15 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
 
         // Plan card: phase that contains the selected calendar day, with phase date range
         if (activePlan != null) {
+            val phaseIdxForSelected = remember(activePlan, effectiveWorkoutDate) {
+                activePlan.phaseIndexForDate(effectiveWorkoutDate)
+            }
+            val planAccent = phaseAccentColor(phaseIdxForSelected, MaterialTheme.colorScheme)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                        color = planAccent.copy(alpha = 0.14f),
                         shape = RoundedCornerShape(12.dp)
                     )
                     .padding(16.dp)
@@ -475,6 +479,9 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
             planStart = activePlan?.startDate,
             planEnd = activePlan?.endDate,
             selectedDate = activePlan?.let { effectiveWorkoutDate },
+            phaseIndexForDate = activePlan
+                ?.takeIf { it.phases.isNotEmpty() }
+                ?.let { p -> { d: LocalDate -> p.phaseIndexForDate(d) } },
             dayAllItemsDone = { d ->
                 activePlan?.allItemsCompleted(d, completedItems[d].orEmpty()) == true
             },
@@ -513,6 +520,20 @@ private fun GoalTypeChip(
     }
 }
 
+private fun phaseAccentColor(phaseIndex: Int, scheme: androidx.compose.material3.ColorScheme): Color {
+    val palette = listOf(
+        scheme.primary,
+        scheme.secondary,
+        scheme.tertiary,
+        scheme.error,
+        scheme.primaryContainer,
+        scheme.secondaryContainer,
+        scheme.tertiaryContainer,
+        scheme.inversePrimary
+    )
+    return palette[(phaseIndex % palette.size).coerceAtLeast(0)]
+}
+
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 private fun CalendarMonthView(
@@ -522,6 +543,7 @@ private fun CalendarMonthView(
     planStart: LocalDate?,
     planEnd: LocalDate?,
     selectedDate: LocalDate?,
+    phaseIndexForDate: ((LocalDate) -> Int?)?,
     dayAllItemsDone: (LocalDate) -> Boolean,
     onDayClick: (LocalDate) -> Unit
 ) {
@@ -609,6 +631,14 @@ private fun CalendarMonthView(
                         val isDone = dayAllItemsDone(currentDate)
                         val clickable = isHighlighted
                         val isSelected = selectedDate != null && currentDate == selectedDate
+                        val phaseIdx = if (inPlanRange) phaseIndexForDate?.invoke(currentDate) else null
+                        val accent = phaseIdx?.let { phaseAccentColor(it, MaterialTheme.colorScheme) }
+                            ?: MaterialTheme.colorScheme.primary
+                        val borderColor = when {
+                            isSelected && phaseIdx != null -> accent
+                            isSelected -> MaterialTheme.colorScheme.tertiary
+                            else -> Color.Transparent
+                        }
 
                         Box(
                             modifier = Modifier
@@ -618,15 +648,15 @@ private fun CalendarMonthView(
                                 .clip(RoundedCornerShape(6.dp))
                                 .border(
                                     width = if (isSelected) 2.dp else 0.dp,
-                                    color = MaterialTheme.colorScheme.tertiary,
+                                    color = borderColor,
                                     shape = RoundedCornerShape(6.dp)
                                 )
                                 .background(
                                     color = when {
                                         isDone && isHighlighted ->
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.42f)
+                                            accent.copy(alpha = 0.42f)
                                         isHighlighted ->
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                                            accent.copy(alpha = 0.22f)
                                         else -> Color.Transparent
                                     },
                                     shape = RoundedCornerShape(6.dp)
@@ -642,7 +672,7 @@ private fun CalendarMonthView(
                                 fontSize = 14.sp,
                                 fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal,
                                 color = if (isHighlighted)
-                                    MaterialTheme.colorScheme.primary
+                                    accent
                                 else
                                     MaterialTheme.colorScheme.onSurface
                             )
@@ -665,21 +695,26 @@ private fun ScrollableCalendar(
     planStart: LocalDate?,
     planEnd: LocalDate?,
     selectedDate: LocalDate?,
+    phaseIndexForDate: ((LocalDate) -> Int?)?,
     dayAllItemsDone: (LocalDate) -> Boolean,
     onDayClick: (LocalDate) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val rangeEnd = planEnd ?: manualHighlightUntil
-    val startMonth = remember(today) { YearMonth.from(today).minusMonths(12) }
-    val endMonth = remember(today, rangeEnd) {
-        val base = rangeEnd?.let { YearMonth.from(it) } ?: YearMonth.from(today)
-        base.plusMonths(12)
+    val (startMonth, endMonth) = remember(today, planStart, planEnd) {
+        if (planStart == null || planEnd == null) {
+            // No plan saved: show only the current month.
+            YearMonth.from(today) to YearMonth.from(today)
+        } else {
+            val minDate = listOf(today, planStart, planEnd).minOrNull() ?: today
+            val maxDate = listOf(today, planStart, planEnd).maxOrNull() ?: today
+            YearMonth.from(minDate) to YearMonth.from(maxDate)
+        }
     }
 
     val months = remember(startMonth, endMonth) { buildMonthList(startMonth, endMonth) }
-    val initialIndex = remember(months, today) {
-        val currentMonth = YearMonth.from(today)
-        months.indexOf(currentMonth).coerceAtLeast(0)
+    val initialIndex = remember(months, today, selectedDate) {
+        val targetMonth = YearMonth.from(selectedDate ?: today)
+        months.indexOf(targetMonth).coerceAtLeast(0)
     }
 
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
@@ -697,6 +732,7 @@ private fun ScrollableCalendar(
                 planStart = planStart,
                 planEnd = planEnd,
                 selectedDate = selectedDate,
+                phaseIndexForDate = phaseIndexForDate,
                 dayAllItemsDone = dayAllItemsDone,
                 onDayClick = onDayClick
             )

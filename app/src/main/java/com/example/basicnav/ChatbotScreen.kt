@@ -63,7 +63,7 @@ class ChatbotService {
         .callTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
-    private val apiKey = "0a957e88a4844b7dbc8e73b6ee75b26a.xjHK0E5mvbkkTZIz" // Replace with your actual API key
+    private val apiKey =  "0a957e88a4844b7dbc8e73b6ee75b26a.xjHK0E5mvbkkTZIz" // Replace with your actual API key
     private val baseUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
     private fun includeInApiHistory(message: ChatMessage): Boolean {
@@ -100,7 +100,7 @@ class ChatbotService {
                 put("model", "glm-4.7-flash")
                 put("messages", messagesJson)
                 put("thinking", JSONObject().apply { put("type", "disabled") })
-                put("max_tokens", 8192)
+                put("max_tokens", 4096)
                 put("temperature", 0.7)
             }
 
@@ -172,7 +172,8 @@ class ChatbotService {
             Workout detail rules:
             - For countable strength moves (push-ups, squats, rows, etc.), always specify sets × reps (e.g. "3 × 12 push-ups") and list **each exercise on its own bullet line**.
             - For time-based work (cardio, HIIT, steady run, yoga, walking), always give a clear duration per session (e.g. "30 minutes LISS", "20 minutes HIIT: 30s on / 30s off").
-            - For each calendar day in the schedule, list that day's work under a line starting with the weekday and a colon, e.g. "Thursday: ...".
+            - For each calendar day in the schedule, the day header MUST be exactly `Weekday:` (weekday name + colon), e.g. "Thursday: ...".
+              Do NOT use formats like "Day 1 (Monday):", "Day 2:", or "D1:" because the app cannot import those.
 
             Multi-week plans: use clear phase headers such as "Week 1: ...", "Week 2: ..." (each week may change workouts). Mention total duration in weeks/months or an end date YYYY-MM-DD.
 

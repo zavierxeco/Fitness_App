@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Star
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -84,6 +85,15 @@ fun BasicnavApp() {
             }
         }
     )
+    val nutritionViewModel: NutritionViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val app = context.applicationContext as Application
+                return NutritionViewModel(app) as T
+            }
+        }
+    )
     var currentScreen by rememberSaveable { mutableStateOf(0) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -92,9 +102,10 @@ fun BasicnavApp() {
             text = when (currentScreen) {
                 0 -> "Tracking"
                 1 -> "Goals"
-                2 -> "Profile"
-                3 -> "Debug"
-                4 -> "AI Coach"
+                2 -> "Nutrition"
+                3 -> "Profile"
+                4 -> "Debug"
+                5 -> "AI Coach"
                 else -> "App"
             },
             modifier = Modifier
@@ -110,9 +121,10 @@ fun BasicnavApp() {
             when (currentScreen) {
                 0 -> TrackingScreen(ringViewModel)
                 1 -> GoalsScreen(fitnessPlanViewModel = fitnessPlanViewModel)
-                2 -> ProfileScreen()
-                3 -> DebugScreen()
-                4 -> ChatbotScreen(viewModel = chatViewModel)
+                2 -> NutritionScreen(nutritionViewModel = nutritionViewModel, fitnessPlanViewModel = fitnessPlanViewModel)
+                3 -> ProfileScreen()
+                4 -> DebugScreen()
+                5 -> ChatbotScreen(viewModel = chatViewModel)
             }
         }
 
@@ -163,12 +175,12 @@ fun BasicnavApp() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    Icons.Default.AccountBox,
-                    contentDescription = "Profile",
+                    Icons.Default.Star,
+                    contentDescription = "Nutrition",
                     tint = if (currentScreen == 2) Color.Blue else Color.Gray
                 )
                 Text(
-                    "Profile",
+                    "Nutrition",
                     color = if (currentScreen == 2) Color.Blue else Color.Gray
                 )
             }
@@ -178,12 +190,12 @@ fun BasicnavApp() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    Icons.Default.Settings,
-                    contentDescription = "Debug",
+                    Icons.Default.AccountBox,
+                    contentDescription = "Profile",
                     tint = if (currentScreen == 3) Color.Blue else Color.Gray
                 )
                 Text(
-                    "Debug",
+                    "Profile",
                     color = if (currentScreen == 3) Color.Blue else Color.Gray
                 )
             }
@@ -193,13 +205,27 @@ fun BasicnavApp() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    Icons.Default.Chat,
-                    contentDescription = "Chatbot",
+                    Icons.Default.Settings,
+                    contentDescription = "Debug",
                     tint = if (currentScreen == 4) Color.Blue else Color.Gray
                 )
                 Text(
-                    "Chatbot",
+                    "Debug",
                     color = if (currentScreen == 4) Color.Blue else Color.Gray
+                )
+            }
+            Column(
+                modifier = Modifier.clickable { currentScreen = 5 },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    Icons.Default.Chat,
+                    contentDescription = "Chatbot",
+                    tint = if (currentScreen == 5) Color.Blue else Color.Gray
+                )
+                Text(
+                    "Chatbot",
+                    color = if (currentScreen == 5) Color.Blue else Color.Gray
                 )
             }
         }
