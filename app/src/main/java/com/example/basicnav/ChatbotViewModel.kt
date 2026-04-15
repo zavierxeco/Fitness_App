@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import android.content.Context
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -15,6 +16,7 @@ import java.time.format.DateTimeFormatter
  * Cleared when the app process is killed or the activity is destroyed.
  */
 class ChatbotViewModel(
+    private val appContext: Context,
     private val fitnessPlanViewModel: FitnessPlanViewModel
 ) : ViewModel() {
 
@@ -70,9 +72,13 @@ class ChatbotViewModel(
                 val apiContext = ChatApiContext(
                     todayDayOfWeek = today.dayOfWeek,
                     todayIsoDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE),
-                    savedPlanRaw = fitnessPlanViewModel.savedPlanRawForApi()
+                    savedPlanRaw = fitnessPlanViewModel.savedPlanRawForApi(),
+                    profileGender = loadFromStorage(appContext, "gender", ""),
+                    profileAge = loadFromStorage(appContext, "age", ""),
+                    profileWeight = loadFromStorage(appContext, "weight", ""),
+                    profileHeight = loadFromStorage(appContext, "height", "")
                 )
-                val response = chatbotService.sendMessage(historySnapshot, apiContext)
+                val response = chatbotService.sendMessage(historySnapshot, apiContext, lastUserText = trimmed)
                 _messages.update { it + ChatMessage(text = response, isUser = false) }
                 if (FitnessPlanParser.looksLikeFitnessPlan(response)) {
                     pendingPlanText = response

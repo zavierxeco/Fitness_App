@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.time.LocalDate
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 class NutritionViewModel(application: Application) : AndroidViewModel(application) {
@@ -65,9 +67,13 @@ class NutritionViewModel(application: Application) : AndroidViewModel(applicatio
     fun addWater(liters: Double) {
         val v = liters.coerceAtLeast(0.0)
         if (v <= 0.0) return
+        val timeLabel = runCatching {
+            LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))
+        }.getOrDefault("")
         val item = WaterLog(
             id = UUID.randomUUID().toString(),
-            liters = v
+            liters = v,
+            timeLabel = timeLabel
         )
         _state.update { it.copy(waters = it.waters + item) }
         persist()

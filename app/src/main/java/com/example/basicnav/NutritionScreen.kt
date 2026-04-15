@@ -213,7 +213,15 @@ fun NutritionScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("${formatLiters(w.liters)} L", fontWeight = FontWeight.SemiBold)
+                        Column(Modifier.weight(1f)) {
+                            val title = w.timeLabel?.takeIf { it.isNotBlank() } ?: "Water log"
+                            Text(title, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "${formatLiters(w.liters)} L",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Text("Edit", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
                     }
                 }

@@ -14,7 +14,9 @@ data class FoodLog(
 
 data class WaterLog(
     val id: String,
-    val liters: Double
+    val liters: Double,
+    /** Display label for the time the log was created (e.g., "14:05"). */
+    val timeLabel: String? = null
 )
 
 data class NutritionDayState(

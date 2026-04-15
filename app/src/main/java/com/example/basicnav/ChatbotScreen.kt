@@ -38,7 +38,12 @@ data class ChatApiContext(
     val todayDayOfWeek: DayOfWeek,
     val todayIsoDate: String,
     /** Full raw text of the plan saved on Goals, if any. */
-    val savedPlanRaw: String?
+    val savedPlanRaw: String?,
+    /** Optional profile fields saved in Profile screen. */
+    val profileGender: String? = null,
+    val profileAge: String? = null,
+    val profileWeight: String? = null,
+    val profileHeight: String? = null
 )
 
 data class ChatMessage(
@@ -76,76 +81,25 @@ class ChatbotService {
         return true
     }
 
-    suspend fun sendMessage(conversation: List<ChatMessage>, apiContext: ChatApiContext): String = withContext(Dispatchers.IO) {
+    suspend fun sendMessage(
+        conversation: List<ChatMessage>,
+        apiContext: ChatApiContext,
+        lastUserText: String
+    ): String = withContext(Dispatchers.IO) {
         try {
             val systemContent = buildSystemPrompt(apiContext)
-            val messagesJson = org.json.JSONArray().apply {
-                put(
-                    JSONObject().apply {
-                        put("role", "system")
-                        put("content", systemContent)
-                    }
-                )
-                conversation.filter(::includeInApiHistory).forEach { m ->
-                    put(
-                        JSONObject().apply {
-                            put("role", if (m.isUser) "user" else "assistant")
-                            put("content", m.text)
-                        }
-                    )
-                }
+            val initial = callModel(
+                systemContent = systemContent,
+                conversation = conversation,
+                temperature = 0.7
+            )
+
+            if (shouldForceStructuredPlan(lastUserText) && !looksStrictMarkdownTemplate(initial)) {
+                // Second pass: ask the model to rewrite into a strict template.
+                return@withContext rewriteIntoTemplate(systemContent, lastUserText, initial)
             }
 
-            val json = JSONObject().apply {
-                put("model", "glm-4.7-flash")
-                put("messages", messagesJson)
-                put("thinking", JSONObject().apply { put("type", "disabled") })
-                put("max_tokens", 4096)
-                put("temperature", 0.7)
-            }
-
-            val mediaType = "application/json".toMediaType()
-            val requestBody = json.toString().toRequestBody(mediaType)
-
-            val request = Request.Builder()
-                .url(baseUrl)
-                .addHeader("Authorization", "Bearer $apiKey")
-                .addHeader("Content-Type", "application/json")
-                .post(requestBody)
-                .build()
-
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-
-            if (response.isSuccessful) {
-                val jsonResponse = JSONObject(responseBody)
-                val choices = jsonResponse.optJSONArray("choices")
-                if (choices == null || choices.length() == 0) {
-                    return@withContext "Error: no choices in response — $responseBody"
-                }
-                val choice = choices.getJSONObject(0)
-                val message = choice.optJSONObject("message")
-                if (message == null) {
-                    return@withContext "Error: missing message — $responseBody"
-                }
-                val content = message.optString("content", "").trim()
-                val reasoning = message.optString("reasoning_content", "").trim()
-                when {
-                    content.isNotEmpty() -> content
-                    reasoning.isNotEmpty() -> reasoning
-                    else -> {
-                        val apiErr = jsonResponse.optJSONObject("error")?.optString("message")
-                        if (!apiErr.isNullOrBlank()) {
-                            "Error: $apiErr"
-                        } else {
-                            val reason = choice.optString("finish_reason", "unknown")
-                            "Empty reply from model (finish_reason=$reason). Raw: ${responseBody.take(500)}"
-                        }
-                    }
-                }
-            } else {
-                "Error: ${response.code} - $responseBody"
-            }
+            initial
         } catch (e: IOException) {
             "Network error: ${e.message}"
         } catch (e: Exception) {
@@ -153,14 +107,205 @@ class ChatbotService {
         }
     }
 
+    private fun shouldForceStructuredPlan(lastUserText: String): Boolean {
+        val t = lastUserText.trim().lowercase()
+        if (t.isBlank()) return false
+        // Heuristic: only force structure when the user is clearly asking for a plan/program.
+        return listOf(
+            "plan",
+            "program",
+            "schedule",
+            "routine",
+            "weeks",
+            "week",
+            "phase",
+            "12 week",
+            "4 week",
+            "workout plan",
+            "fitness plan"
+        ).any { it in t }
+    }
+
+    private fun looksStrictMarkdownTemplate(text: String): Boolean {
+        // Enforce Markdown headings + separators so the UI renders distinct typography.
+        val idxNut = Regex("""(?m)^\s*##\s+nutrition\s+targets\s*$""", RegexOption.IGNORE_CASE).find(text)?.range?.first
+        val idxPlan = Regex("""(?m)^\s*##\s+workout\s+plan\s*$""", RegexOption.IGNORE_CASE).find(text)?.range?.first
+        val idxKeys = Regex("""(?m)^\s*##\s+keys\s+to\s+success\s*&\s*overtraining\s+prevention\s*$""", RegexOption.IGNORE_CASE)
+            .find(text)?.range?.first
+            ?: Regex("""(?m)^\s*##\s+keys\s+to\s+success.*$""", RegexOption.IGNORE_CASE).find(text)?.range?.first
+
+        if (idxNut == null || idxPlan == null || idxKeys == null) return false
+        if (!(idxNut < idxPlan && idxPlan < idxKeys)) return false
+
+        // Require divider lines between major sections.
+        val dividerCount = Regex("""(?m)^\s*---\s*$""").findAll(text).count()
+        if (dividerCount < 3) return false
+
+        // Require a short opening paragraph BEFORE Nutrition Targets (no heading).
+        val prefix = text.substring(0, idxNut).trim()
+        if (prefix.isBlank()) return false
+        if (Regex("""(?m)^\s*##\s+""").containsMatchIn(prefix)) return false
+
+        // Require Nutrition Targets with numeric kcal/g and water.
+        val hasCalories = Regex("""(?i)\bcalories\b\s*[:：]\s*\d{3,5}\s*kcal\b""").containsMatchIn(text)
+        val hasProtein = Regex("""(?i)\bprotein\b\s*[:：]\s*\d{2,4}\s*g\b""").containsMatchIn(text)
+        val hasWater = Regex("""(?i)\bwater\b\s*[:：]\s*(\d{3,5}\s*ml|\d+(?:\.\d+)?\s*l)\b""").containsMatchIn(text)
+        if (!(hasCalories && hasProtein && hasWater)) return false
+
+        // Require some weekday markers for the workout schedule.
+        val hasWeekdays = Regex("""(?im)^\s*(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*[:：]""")
+            .containsMatchIn(text)
+        if (!hasWeekdays) return false
+
+        // Must start with the opening paragraph, not a heading.
+        if (text.trimStart().startsWith("##")) return false
+
+        return true
+    }
+
+    private fun rewriteIntoTemplate(systemContent: String, userText: String, draft: String): String {
+        val rewriteInstruction = """
+Rewrite your previous answer into the following strict structure and order, using Markdown so the app renders clear typography.
+
+Rules:
+- Output MUST contain these sections in this order.
+- Use the exact section headings shown below (Markdown headings).
+- Put a separator line `---` between major sections.
+- In "Nutrition Targets", include ONE specific number for each (no ranges):
+  Calories: <number> kcal
+  Protein: <number> g
+  Water: <number> ml OR <number> L
+- In "Workout Plan", follow the app import rules: weekday headers must be exactly `Monday:`, `Tuesday:`, ... with bullet workout items underneath; no shorthand like "repeat above".
+- For multi-week phases such as `Phase 1: ... (Weeks 1–3)`, you MUST provide exactly ONE Monday–Sunday schedule for the phase (a single 7-day template). Do NOT repeat the same weekly schedule multiple times for Week 1, Week 2, Week 3.
+- After the workout plan, include "Keys to Success & Overtraining Prevention" with concise bullets.
+- Do not add extra sections above/between/below these.
+
+Template:
+<1–2 short sentences>
+
+---
+
+## Nutrition Targets
+Calories: <number> kcal
+Protein: <number> g
+Water: <number> ml OR <number> L
+
+---
+
+## Workout Plan
+<plan content>
+
+---
+
+## Keys to Success & Overtraining Prevention
+<bullets>
+
+User request:
+$userText
+
+Your previous draft to rewrite:
+$draft
+        """.trimIndent()
+
+        val conv = listOf(
+            ChatMessage(text = rewriteInstruction, isUser = true)
+        )
+        // Slightly lower temperature for formatting compliance.
+        return callModel(systemContent = systemContent, conversation = conv, temperature = 0.4)
+    }
+
+    private fun callModel(
+        systemContent: String,
+        conversation: List<ChatMessage>,
+        temperature: Double
+    ): String {
+        val messagesJson = org.json.JSONArray().apply {
+            put(
+                JSONObject().apply {
+                    put("role", "system")
+                    put("content", systemContent)
+                }
+            )
+            conversation.filter(::includeInApiHistory).forEach { m ->
+                put(
+                    JSONObject().apply {
+                        put("role", if (m.isUser) "user" else "assistant")
+                        put("content", m.text)
+                    }
+                )
+            }
+        }
+
+        val json = JSONObject().apply {
+            put("model", "glm-4.7-flash")
+            put("messages", messagesJson)
+            put("thinking", JSONObject().apply { put("type", "disabled") })
+            put("max_tokens", 4096)
+            put("temperature", temperature)
+        }
+
+        val mediaType = "application/json".toMediaType()
+        val requestBody = json.toString().toRequestBody(mediaType)
+
+        val request = Request.Builder()
+            .url(baseUrl)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("Content-Type", "application/json")
+            .post(requestBody)
+            .build()
+
+        val response = client.newCall(request).execute()
+        val responseBody = response.body?.string() ?: ""
+
+        if (!response.isSuccessful) {
+            return "Error: ${response.code} - $responseBody"
+        }
+
+        val jsonResponse = JSONObject(responseBody)
+        val choices = jsonResponse.optJSONArray("choices")
+        if (choices == null || choices.length() == 0) {
+            return "Error: no choices in response — $responseBody"
+        }
+        val choice = choices.getJSONObject(0)
+        val message = choice.optJSONObject("message") ?: return "Error: missing message — $responseBody"
+        val content = message.optString("content", "").trim()
+        val reasoning = message.optString("reasoning_content", "").trim()
+        return when {
+            content.isNotEmpty() -> content
+            reasoning.isNotEmpty() -> reasoning
+            else -> {
+                val apiErr = jsonResponse.optJSONObject("error")?.optString("message")
+                if (!apiErr.isNullOrBlank()) "Error: $apiErr"
+                else {
+                    val reason = choice.optString("finish_reason", "unknown")
+                    "Empty reply from model (finish_reason=$reason). Raw: ${responseBody.take(500)}"
+                }
+            }
+        }
+    }
+
     private fun buildSystemPrompt(ctx: ChatApiContext): String {
         val dow = ctx.todayDayOfWeek.name.lowercase().replaceFirstChar { it.titlecase() }
-        val timeCtx = "\n\n[App context] Today is $dow (${ctx.todayIsoDate}). When you give a weekly workout schedule, list days in order starting from **$dow** as day 1 of the week (then the following six days), not always Monday-first, unless the user explicitly wants Monday-start."
+        val timeCtx =
+            "\n\n[App context] Today is $dow (${ctx.todayIsoDate}). When you give a weekly workout schedule, always list all 7 days in order: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday."
+        val profileCtx = run {
+            val g = ctx.profileGender?.trim().orEmpty()
+            val a = ctx.profileAge?.trim().orEmpty()
+            val w = ctx.profileWeight?.trim().orEmpty()
+            val h = ctx.profileHeight?.trim().orEmpty()
+            if (g.isBlank() && a.isBlank() && w.isBlank() && h.isBlank()) "" else
+                "\n\n[User profile]\n" +
+                    "Gender: ${if (g.isBlank()) "Unknown" else g}\n" +
+                    "Age: ${if (a.isBlank()) "Unknown" else a}\n" +
+                    "Weight: ${if (w.isBlank()) "Unknown" else w}\n" +
+                    "Height: ${if (h.isBlank()) "Unknown" else h}\n" +
+                    "Use these fields when setting Nutrition targets."
+        }
         val planCtx = ctx.savedPlanRaw?.takeIf { it.isNotBlank() }?.let { raw ->
             "\n\n[User's current plan saved in Goals — read and follow this when they ask to adjust, tweak, replace, or continue the plan.]\n" +
                 raw.take(14_000)
         }.orEmpty()
-        return SYSTEM_PROMPT_BASE + timeCtx + planCtx
+        return SYSTEM_PROMPT_BASE + timeCtx + profileCtx + planCtx
     }
 
     private val SYSTEM_PROMPT_BASE = """
@@ -168,6 +313,23 @@ class ChatbotService {
             For quick questions, keep answers brief.
             When the user asks for a workout or nutrition plan, a program, or goals over weeks/months,
             give a concrete, actionable plan. Remind users to consult a doctor for medical conditions.
+
+            Nutrition targets (REQUIRED when giving any workout plan):
+            - You MUST put a short "Nutrition targets" block ABOVE the workout plan.
+            - You MUST give specific daily numbers that can be imported:
+              Calories: <number> kcal
+              Protein: <number> g
+              Water: <number> ml OR <number> L
+            - Do NOT give ranges (e.g. "1800–2000 kcal") and do NOT omit units.
+            - If the user provides height/weight/age/sex/activity, tailor targets; otherwise choose reasonable defaults for the goal.
+            
+            Output order when asked for a plan/program MUST be:
+              1) A short opening paragraph (1–2 sentences) WITHOUT a heading
+              2) Nutrition Targets (with numeric Calories/Protein/Water)
+              3) Workout Plan
+              4) Keys to Success & Overtraining Prevention
+            - Use Markdown headings (`## ...`) for these sections and add `---` separator lines between them so the app renders clear section spacing.
+            - For phase titles that include a week range like `(Weeks 1–3)`, include ONLY ONE Monday–Sunday schedule for that phase (a single weekly template). Do NOT repeat the same week multiple times inside the phase.
 
             Workout detail rules:
             - For countable strength moves (push-ups, squats, rows, etc.), always specify sets × reps (e.g. "3 × 12 push-ups") and list **each exercise on its own bullet line**.
@@ -327,9 +489,13 @@ fun ChatbotScreen(viewModel: ChatbotViewModel) {
                     onClick = { viewModel.sendMessage() },
                     enabled = !isLoading && inputText.isNotBlank(),
                     shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.size(48.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White
+                    )
                 ) {
-                    Text("➤", fontSize = 24.sp)
+                    Text("➤", fontSize = 24.sp, color = Color.White)
                 }
             }
         }
