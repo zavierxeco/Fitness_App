@@ -111,8 +111,11 @@ data class ParsedFitnessPlan(
         }
         val dow = date.dayOfWeek
         val obj = templates.firstOrNull { dow in it.days }?.objective?.trim().orEmpty()
-        return if (obj.isNotBlank()) {
-            listOf(WorkoutItem(id = "legacy_${dow.name}", text = obj))
+        val parts = obj.lines().map { it.trim() }.filter { it.isNotBlank() }
+        return if (parts.isNotEmpty()) {
+            parts.mapIndexed { idx, t ->
+                WorkoutItem(id = "legacy_${dow.name}_$idx", text = t)
+            }
         } else {
             emptyList()
         }
@@ -167,11 +170,13 @@ object FitnessPlanParser {
     private val weekOrPhaseMention = Regex("""\b(?:week|phase)\s*\d+""", RegexOption.IGNORE_CASE)
     private val dividerLineRegex = Regex("""^\s*(?:-{2,}|_{2,}|\*{3,})\s*$""")
     private val caloriesTargetRegex = Regex(
-        """(?i)\b(?:calorie\s*target|calories)\b[^0-9\n]{0,40}(\d{1,3}(?:,\d{3})*)(?:\s*[–-]\s*(\d{1,3}(?:,\d{3})*))?\s*(?:kcal|cal(?:ories)?|calories)\b"""
+        // Accept 3–5 digit values with or without commas (e.g. 1600, 2,200).
+        """(?i)\b(?:calorie\s*target|calories)\b[^0-9\n]{0,40}(\d{1,5}(?:,\d{3})*)(?:\s*[–-]\s*(\d{1,5}(?:,\d{3})*))?\s*(?:kcal|cal(?:ories)?|calories)\b"""
     )
     private val proteinPerKgRegex = Regex("""(?i)\b(\d+(?:\.\d+)?)\s*g\s*(?:/|\s*per\s*)\s*kg\b""")
     private val proteinTargetGramsRegex = Regex("""(?i)\bprotein\b[^0-9\n]{0,40}(\d{2,4})\s*g\b""")
     private val waterTargetRegex = Regex("""(?i)\b(?:hydration|water)\b[^0-9\n]{0,40}(\d+(?:\.\d+)?)\s*(?:l|liters?|litres?)\b""")
+    private val waterTargetMlRegex = Regex("""(?i)\b(?:hydration|water)\b[^0-9\n]{0,40}(\d{3,5})\s*ml\b""")
 
     /**
      * Use for showing the "save to Goals?" prompt. Broader than [parse] so we still ask when the
@@ -267,12 +272,15 @@ object FitnessPlanParser {
 
         val water = waterTargetRegex.findAll(head).mapNotNull { it.groupValues[1].toDoubleOrNull() }
             .maxOrNull()
+        val waterMl = waterTargetMlRegex.findAll(head).mapNotNull { it.groupValues[1].toDoubleOrNull() }
+            .maxOrNull()
+        val waterLiters = listOfNotNull(water, waterMl?.div(1000.0)).maxOrNull()
 
         val out = NutritionTargets(
             caloriesKcal = calories,
             proteinGPerKg = proteinPerKg,
             proteinGrams = proteinGrams,
-            waterLiters = water
+            waterLiters = waterLiters
         )
         return if (out.caloriesKcal != null || out.proteinGPerKg != null || out.proteinGrams != null || out.waterLiters != null) out else null
     }
@@ -433,7 +441,14 @@ object FitnessPlanParser {
         }
         flushDay()
 
-        val asStrings = dayMap.mapKeys { it.key.name }.mapValues { it.value.toList() }
+        // De-duplicate identical items per day. This protects against LLM outputs that repeat the
+        // same week multiple times inside a multi-week phase, which otherwise produces repeated
+        // entries such as multiple "Rest day" items.
+        val deduped = dayMap.mapValues { (_, items) ->
+            val seen = LinkedHashSet<String>()
+            items.filter { seen.add(it.text.trim()) }
+        }
+        val asStrings = deduped.mapKeys { it.key.name }.mapValues { it.value.toList() }
         return PlanPhase(title = title, weekIndex = phaseIndex, dayEntries = asStrings)
     }
 
@@ -489,23 +504,97 @@ object FitnessPlanParser {
     }
 
     private fun extractTemplates(normalizedFlat: String): List<WeekdayObjectiveTemplate> {
-        val lines = normalizedFlat.lines().map { sanitizePlanLine(it) }.filter { it.isNotBlank() }
+        // Legacy (non-phase) plans: capture `Monday: Header` plus any bullet/sub-lines that follow,
+        // so newer “header + bullet list” formats can still be imported.
         val out = mutableListOf<WeekdayObjectiveTemplate>()
         val seen = mutableSetOf<Set<DayOfWeek>>()
-        for (line in lines) {
-            val m = dayHeaderCore.find(line) ?: continue
-            val group = m.groupValues[1].trim()
-            val objective = m.groupValues[2].trim()
-            if (objective.length < 4) continue
-            val days = parseDayGroup(group) ?: continue
-            if (days.isEmpty() || days in seen) continue
+
+        var anchorDays: Set<DayOfWeek> = emptySet()
+        var pendingGroupLabel: String? = null
+        var pendingHeader: String? = null
+        val pendingBullets = mutableListOf<String>()
+
+        fun isDividerLine(raw: String): Boolean = dividerLineRegex.matches(raw.trim())
+
+        fun flushTemplate() {
+            val days = anchorDays
+            val groupLabel = pendingGroupLabel
+            val header = pendingHeader?.trim().orEmpty()
+            if (days.isEmpty() || groupLabel.isNullOrBlank()) {
+                pendingBullets.clear()
+                pendingHeader = null
+                pendingGroupLabel = null
+                anchorDays = emptySet()
+                return
+            }
+            if (days in seen) {
+                pendingBullets.clear()
+                pendingHeader = null
+                pendingGroupLabel = null
+                anchorDays = emptySet()
+                return
+            }
+
+            val lines = mutableListOf<String>()
+            // If bullet details exist under `Monday: <focus>`, treat <focus> as a title only (not a workout item).
+            // Keep backward compatibility: for older one-line templates with no bullets, keep the header as the item.
+            if (pendingBullets.isEmpty() && header.isNotBlank()) lines += header
+            for (rawBullet in pendingBullets) {
+                val sanitized = sanitizePlanLine(rawBullet)
+                if (sanitized.length < 2) continue
+                if (isDividerLine(rawBullet) || isDividerLine(sanitized)) continue
+                if (looksLikeFooterText(sanitized)) continue
+                lines += sanitized
+            }
+
+            val objective = lines.joinToString("\n").trim()
+            if (objective.length < 2) {
+                pendingBullets.clear()
+                pendingHeader = null
+                pendingGroupLabel = null
+                anchorDays = emptySet()
+                return
+            }
+
             seen.add(days)
             out += WeekdayObjectiveTemplate(
-                dayGroupLabel = group,
+                dayGroupLabel = groupLabel,
                 days = days,
                 objective = objective
             )
+
+            pendingBullets.clear()
+            pendingHeader = null
+            pendingGroupLabel = null
+            anchorDays = emptySet()
         }
+
+        for (raw in normalizedFlat.lines()) {
+            val line = sanitizePlanLine(raw)
+            if (line.isBlank()) continue
+            if (isDividerLine(raw) || isDividerLine(line)) {
+                flushTemplate()
+                continue
+            }
+            if (looksLikeFooterText(line)) continue
+
+            val m = dayHeaderCore.find(line)
+            if (m != null) {
+                flushTemplate()
+                val group = m.groupValues[1].trim()
+                val days = parseDayGroup(group) ?: continue
+                anchorDays = days
+                pendingGroupLabel = group
+                pendingHeader = m.groupValues[2].trim()
+                continue
+            }
+
+            if (anchorDays.isNotEmpty() && pendingGroupLabel != null && isExerciseSubLine(raw, line)) {
+                pendingBullets.add(raw)
+            }
+        }
+        flushTemplate()
+
         return out
     }
 
