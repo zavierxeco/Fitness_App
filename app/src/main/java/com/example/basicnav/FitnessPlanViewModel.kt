@@ -22,6 +22,11 @@ class FitnessPlanViewModel(application: Application) : AndroidViewModel(applicat
     init {
         _plan.value = repository.loadPlan()
         _completedItems.value = repository.loadCompletedItems()
+        if (_plan.value != null) {
+            WorkoutReminder.scheduleNext22(application)
+        } else {
+            WorkoutReminder.cancel(application)
+        }
     }
 
     private fun persist() {
@@ -34,6 +39,7 @@ class FitnessPlanViewModel(application: Application) : AndroidViewModel(applicat
         _plan.value = parsed
         _completedItems.value = emptyMap()
         persist()
+        WorkoutReminder.scheduleNext22(getApplication())
         return true
     }
 
@@ -58,6 +64,7 @@ class FitnessPlanViewModel(application: Application) : AndroidViewModel(applicat
         _plan.value = null
         _completedItems.value = emptyMap()
         persist()
+        WorkoutReminder.cancel(getApplication())
     }
 
     /** Text injected into the chat system prompt when the user may want to adjust the saved plan. */

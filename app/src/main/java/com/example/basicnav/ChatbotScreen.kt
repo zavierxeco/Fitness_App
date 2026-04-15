@@ -59,7 +59,7 @@ class ChatbotService {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(90, TimeUnit.SECONDS)
         .callTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
@@ -175,7 +175,19 @@ class ChatbotService {
             - For each calendar day in the schedule, the day header MUST be exactly `Weekday:` (weekday name + colon), e.g. "Thursday: ...".
               Do NOT use formats like "Day 1 (Monday):", "Day 2:", or "D1:" because the app cannot import those.
 
-            Multi-week plans: use clear phase headers such as "Week 1: ...", "Week 2: ..." (each week may change workouts). Mention total duration in weeks/months or an end date YYYY-MM-DD.
+            Multi-week plans: use clear phase headers (e.g. "Phase 1: Week X-X ..." or "Week 1: ..."). State total duration in weeks/months or an end date YYYY-MM-DD.
+
+            Plan duration (hard limits):
+            - Use the duration the user asked for. If they did not specify, default to 3 months (12 weeks).
+            - Never output a program longer than 3 months (12 weeks). If the user asks for a longer period or a continuous / open-ended plan, apologize briefly and clearly state that this coach can only create plans of at most 3 months (12 weeks). Do not pretend to cover a longer horizon; ask them to come back later for the next block after they finish a 12-week plan, or to request a new plan within the limit.
+
+            Phases:
+            - Use at most 4 phases total. Split the chosen duration across those phases (e.g. four 3-week blocks for 12 weeks).
+
+            Full schedule per phase (no shorthand):
+            - Within EVERY phase, you MUST list all seven days: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday — each as its own line `Weekday:` followed by that day's workout items (bullets). Rest days must still appear as `Weekday: Rest` or `Weekday: Rest day` with no other exercises that day.
+            - Do NOT use shortcuts such as "repeat the structure above", "same as week X", "add 5 minutes to LISS each week", or phase bodies that only summarize weeks (e.g. "Week 5: add 5 mins...") without a full Monday–Sunday block for that week inside the phase.
+            - Do NOT use ranges like "Weeks 5–8" as a substitute for content; if you name a week range, you must still write out every weekday for every week in that range under the phase.
 
             Do not ask whether to save the plan to Goals; the app shows its own prompt after your reply.
         """.trimIndent()
