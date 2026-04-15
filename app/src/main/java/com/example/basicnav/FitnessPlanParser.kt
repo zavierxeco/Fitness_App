@@ -47,9 +47,22 @@ data class ParsedFitnessPlan(
     val rawSourceText: String,
     val nutritionTargets: NutritionTargets? = null
 ) {
+    private fun isRestDayText(text: String): Boolean {
+        val t = text.trim().lowercase()
+        if (t.isBlank()) return false
+        // Treat "Rest" / "Rest day" style headers as rest days.
+        return Regex("""^\s*rest(?:\s+day)?\b""").containsMatchIn(t)
+    }
+
+    fun isRestDay(date: LocalDate): Boolean {
+        val items = itemsForDate(date)
+        // Heuristic: rest days are typically a single item such as "Rest" or "Rest Day".
+        if (items.size != 1) return false
+        return isRestDayText(items.first().text)
+    }
     private fun weeksSpanFromTitle(title: String): Int? {
         // Examples we want to catch:
-        // "Phase 1: ... (Weeks 1–2)", "Phase 2 ... (Week 3-4)", "Week 1: ..." (implies 1)
+        // "Phase 1: ... (Weeks 1–2)", "Phase 2 ... (Week 3-4)"
         val rx = Regex("""\(\s*Weeks?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*\)""", RegexOption.IGNORE_CASE)
         val m = rx.find(title) ?: return null
         val a = m.groupValues[1].toIntOrNull() ?: return null
@@ -111,6 +124,8 @@ data class ParsedFitnessPlan(
     fun allItemsCompleted(date: LocalDate, completedIds: Set<String>): Boolean {
         val items = itemsForDate(date)
         if (items.isEmpty()) return false
+        // Rest days are treated as implicitly completed.
+        if (isRestDay(date)) return true
         return items.all { it.id in completedIds }
     }
 }

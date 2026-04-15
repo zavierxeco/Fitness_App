@@ -317,20 +317,32 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
                     fontSize = 14.sp
                 )
             } else {
+                val isRestDay = activePlan.isRestDay(effectiveWorkoutDate)
                 itemsForDay.forEach { item ->
-                    val checked = item.id in doneSet
+                    val checked = (item.id in doneSet) || isRestDay
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                            checked = checked,
-                            onCheckedChange = {
-                                fitnessPlanViewModel.toggleItemCompleted(effectiveWorkoutDate, item.id)
-                            }
-                        )
+                        if (!isRestDay) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = {
+                                    fitnessPlanViewModel.toggleItemCompleted(effectiveWorkoutDate, item.id)
+                                }
+                            )
+                        } else {
+                            // Hide checkbox for rest days but still show as completed.
+                            Text(
+                                text = "✓",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(start = 6.dp, end = 12.dp)
+                            )
+                        }
                         Text(
                             text = item.text,
                             fontSize = 14.sp,
@@ -338,7 +350,7 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
                         )
                     }
                 }
-                if (itemsForDay.isNotEmpty() && itemsForDay.all { it.id in doneSet }) {
+                if (itemsForDay.isNotEmpty() && (isRestDay || itemsForDay.all { it.id in doneSet })) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Nice work — you logged everything for this day.",

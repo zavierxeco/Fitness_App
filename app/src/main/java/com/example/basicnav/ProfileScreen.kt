@@ -51,6 +51,7 @@ fun ProfileScreen() {
     // Load saved data from storage
     var name by remember { mutableStateOf(loadFromStorage(context, "name", "Enter Name")) }
     var email by remember { mutableStateOf(loadFromStorage(context, "email", "Enter Email")) }
+    var gender by remember { mutableStateOf(loadFromStorage(context, "gender", "Male")) }
     var age by remember { mutableStateOf(loadFromStorage(context, "age", "25")) }
     var weight by remember { mutableStateOf(loadFromStorage(context, "weight", "70 kg")) }
     var height by remember { mutableStateOf(loadFromStorage(context, "height", "180 cm")) }
@@ -137,6 +138,7 @@ fun ProfileScreen() {
                         // Save all data when clicking Save
                         saveToStorage(context, "name", name)
                         saveToStorage(context, "email", email)
+                        saveToStorage(context, "gender", gender)
                         saveToStorage(context, "age", age)
                         saveToStorage(context, "weight", weight)
                         saveToStorage(context, "height", height)
@@ -213,6 +215,28 @@ fun ProfileScreen() {
             isEditing = isEditing,
             onValueChange = { email = it }
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Gender",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            val genders = listOf("Male", "Female")
+            genders.forEach { g ->
+                GenderChip(
+                    gender = g,
+                    isSelected = gender == g,
+                    isEditing = isEditing,
+                    onClick = { if (isEditing) gender = g }
+                )
+            }
+        }
 
         ProfileField(
             label = "Age",
@@ -326,6 +350,42 @@ fun RaceChip(
     ) {
         Text(
             text = race,
+            color = if (isSelected) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurface,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+        )
+    }
+}
+
+@Composable
+fun GenderChip(
+    gender: String,
+    isSelected: Boolean,
+    isEditing: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .padding(all = 4.dp)
+            .background(
+                color = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(size = 16.dp)
+            )
+            .clickable(
+                enabled = isEditing,
+                onClick = onClick
+            )
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline,
+                shape = RoundedCornerShape(size = 16.dp)
+            )
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = gender,
             color = if (isSelected) MaterialTheme.colorScheme.onPrimary
             else MaterialTheme.colorScheme.onSurface,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
