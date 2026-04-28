@@ -51,6 +51,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -60,6 +61,7 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.util.Locale
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -71,26 +73,24 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
 
     var selectedWorkoutDateStr by rememberSaveable { mutableStateOf("") }
 
-    // Target state
-    var targetType by rememberSaveable { mutableStateOf("Weight Loss") }
-    var targetWeight by rememberSaveable { mutableStateOf("") }
-    var targetDateText by rememberSaveable { mutableStateOf("") } // format: yyyy-MM-dd
+    // Target state (persisted)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val targetRepo = remember { GoalTargetRepository(context) }
+    // Note: use `remember` (not `rememberSaveable`) because GoalTarget is not automatically saveable.
+    // Persisted storage is handled by [GoalTargetRepository].
+    var target by remember {
+        mutableStateOf(targetRepo.load() ?: GoalTarget(goalType = GoalType.WEIGHT_LOSS))
+    }
     var isTargetDialogOpen by rememberSaveable { mutableStateOf(false) }
 
     // Helpers for date/calendar
     val dateFormatter = remember { DateTimeFormatter.ISO_LOCAL_DATE }
     val today = remember { LocalDate.now() }
     val scroll = rememberScrollState()
-
-    val parsedTargetDate: LocalDate? = remember(targetDateText) {
-        if (targetDateText.isBlank()) null
-        else {
-            try {
-                LocalDate.parse(targetDateText, dateFormatter)
-            } catch (e: DateTimeParseException) {
-                null
-            }
-        }
+    LaunchedEffect(Unit) { targetRepo.load()?.let { target = it } }
+    // Reload persisted target after a plan import (plan commit happens on the Chatbot tab).
+    LaunchedEffect(activePlan?.rawSourceText) {
+        targetRepo.load()?.let { target = it }
     }
 
     val selectedWorkoutDate: LocalDate = remember(selectedWorkoutDateStr) {
@@ -146,7 +146,7 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(12.dp)
                 )
-                .clickable { isTargetDialogOpen = true }
+                .clickable(enabled = activePlan != null) { isTargetDialogOpen = true }
                 .padding(16.dp)
         ) {
             Text(
@@ -157,42 +157,47 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text(
-                text = "Goal: $targetType",
-                fontSize = 16.sp
-            )
-
-            if (targetWeight.isNotBlank()) {
+            if (activePlan == null) {
                 Text(
-                    text = "Target weight: $targetWeight",
-                    fontSize = 16.sp
-                )
-            }
-
-            if (parsedTargetDate != null) {
-                Text(
-                    text = "Target date: ${parsedTargetDate.format(dateFormatter)}",
-                    fontSize = 16.sp
-                )
-            } else if (targetDateText.isNotBlank()) {
-                // Invalid date hint
-                Text(
-                    text = "Target date: invalid (use YYYY-MM-DD)",
+                    text = "No plan yet. Tell AI Coach your target to generate a plan.",
                     fontSize = 14.sp,
-                    color = Color.Red
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            } else {
+                Text(
+                    text = "Goal: ${target.goalType.toDisplay()}",
+                    fontSize = 16.sp
+                )
+                when (target.goalType) {
+                    GoalType.WEIGHT_LOSS, GoalType.WEIGHT_GAIN -> {
+                        target.targetWeightKg?.let { Text("Target weight: ${formatKg(it)} kg", fontSize = 16.sp) }
+                    }
+                    GoalType.MUSCLE_GAIN -> {
+                        target.muscleTargetText?.takeIf { it.isNotBlank() }?.let {
+                            Text("Muscles: $it", fontSize = 16.sp)
+                        }
+                    }
+                    GoalType.OTHERS -> {
+                        target.otherTargetText?.takeIf { it.isNotBlank() }?.let {
+                            Text("Target: $it", fontSize = 16.sp)
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Tap to adjust your goal",
+                text = if (activePlan == null)
+                    "Import a plan to enable target details"
+                else
+                    "Target is tied to your current plan. To change it, ask AI Coach for a new plan.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
-        // Target editing dialog
+        // Target details dialog (read-only)
         if (isTargetDialogOpen) {
             AlertDialog(
                 onDismissRequest = { isTargetDialogOpen = false },
@@ -201,82 +206,48 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
                         Text("Done")
                     }
                 },
-                dismissButton = {
-                    TextButton(onClick = { isTargetDialogOpen = false }) {
-                        Text("Cancel")
-                    }
-                },
-                title = { Text("Edit Target") },
+                title = { Text("Target details") },
                 text = {
                     Column {
-                        // Selection bar for Weight Loss / Muscle Gain
                         Text(
                             text = "Goal type",
                             fontWeight = FontWeight.SemiBold
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            GoalTypeChip(
-                                text = "Weight Loss",
-                                isSelected = targetType == "Weight Loss",
-                                onClick = { targetType = "Weight Loss" }
-                            )
-                            GoalTypeChip(
-                                text = "Muscle Gain",
-                                isSelected = targetType == "Muscle Gain",
-                                onClick = { targetType = "Muscle Gain" }
-                            )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(target.goalType.toDisplay())
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        when (target.goalType) {
+                            GoalType.WEIGHT_LOSS, GoalType.WEIGHT_GAIN -> {
+                                Text("Target weight", fontWeight = FontWeight.SemiBold)
+                                Spacer(modifier = Modifier.height(6.dp))
+                                val v = target.targetWeightKg
+                                Text(if (v == null) "Not available" else "${formatKg(v)} kg")
+                            }
+                            GoalType.MUSCLE_GAIN -> {
+                                Text("Target muscle groups", fontWeight = FontWeight.SemiBold)
+                                Spacer(modifier = Modifier.height(6.dp))
+                                val t = target.muscleTargetText?.trim().orEmpty()
+                                if (t.isBlank()) {
+                                    Text("Not specified")
+                                } else {
+                                    Text(t)
+                                }
+                            }
+                            GoalType.OTHERS -> {
+                                Text("Target", fontWeight = FontWeight.SemiBold)
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(target.otherTargetText?.takeIf { it.isNotBlank() } ?: "Not specified")
+                            }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Target weight input
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Target weight",
-                            fontWeight = FontWeight.SemiBold
+                            text = "This goal is linked to your current plan. To change it, generate and commit a new plan in AI Coach.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        TextField(
-                            value = targetWeight,
-                            onValueChange = { targetWeight = it },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions.Default.copy(
-                                keyboardType = KeyboardType.Number
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("e.g. 70 kg") }
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Target date input
-                        Text(
-                            text = "Target completion date",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        TextField(
-                            value = targetDateText,
-                            onValueChange = { targetDateText = it },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions.Default.copy(
-                                keyboardType = KeyboardType.Number
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("YYYY-MM-DD") }
-                        )
-
-                        if (targetDateText.isNotBlank() && parsedTargetDate == null) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Please enter a valid date in format YYYY-MM-DD.",
-                                fontSize = 12.sp,
-                                color = Color.Red
-                            )
-                        }
                     }
                 }
             )
@@ -487,7 +458,7 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
         ScrollableCalendar(
             today = today,
             manualHighlightFrom = today,
-            manualHighlightUntil = parsedTargetDate,
+            manualHighlightUntil = null,
             planStart = activePlan?.startDate,
             planEnd = activePlan?.endDate,
             selectedDate = activePlan?.let { effectiveWorkoutDate },
@@ -505,6 +476,39 @@ fun GoalsScreen(fitnessPlanViewModel: FitnessPlanViewModel) {
     }
 }
 
+private fun GoalType.toDisplay(): String = when (this) {
+    GoalType.WEIGHT_LOSS -> "Weight Loss"
+    GoalType.WEIGHT_GAIN -> "Weight Gain"
+    GoalType.MUSCLE_GAIN -> "Muscle Gain"
+    GoalType.OTHERS -> "Others"
+}
+
+private fun formatKg(v: Double): String =
+    if (kotlin.math.abs(v - v.toInt()) < 1e-9) v.toInt().toString() else String.format(Locale.US, "%.1f", v)
+
+@Composable
+private fun FlowChips(items: List<String>) {
+    if (items.isEmpty()) return
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items.take(6).forEach { it ->
+            Box(
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(50))
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = it,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun GoalTypeChip(
     text: String,
@@ -519,7 +523,7 @@ private fun GoalTypeChip(
                 shape = RoundedCornerShape(50)
             )
             .clickable { onClick() }
-            .padding(vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(

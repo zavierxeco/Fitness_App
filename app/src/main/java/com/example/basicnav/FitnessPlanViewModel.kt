@@ -11,6 +11,7 @@ import java.time.LocalDate
 class FitnessPlanViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = FitnessPlanRepository(application)
+    private val targetRepository = GoalTargetRepository(application)
 
     private val _plan = MutableStateFlow<ParsedFitnessPlan?>(null)
     val plan: StateFlow<ParsedFitnessPlan?> = _plan.asStateFlow()
@@ -39,6 +40,11 @@ class FitnessPlanViewModel(application: Application) : AndroidViewModel(applicat
         _plan.value = parsed
         _completedItems.value = emptyMap()
         persist()
+        // Extract and persist target for Goals screen (best-effort).
+        val weightText = loadFromStorage(getApplication(), "weight", "")
+        val weightKg = GoalTargetExtractor.parseProfileWeightKgOrNull(weightText)
+        val target = GoalTargetExtractor.extract(assistantText, weightKg)
+        targetRepository.save(target)
         WorkoutReminder.scheduleNext22(getApplication())
         return true
     }

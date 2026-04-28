@@ -22,6 +22,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -87,16 +88,38 @@ class ChatbotService {
         lastUserText: String
     ): String = withContext(Dispatchers.IO) {
         try {
-            val systemContent = buildSystemPrompt(apiContext)
-            val initial = callModel(
+            val systemContent = buildSystemPrompt(apiContext, lastUserText)
+            val wantsPlan = shouldForceStructuredPlan(lastUserText)
+
+            // First call
+            var initial = callModel(
                 systemContent = systemContent,
                 conversation = conversation,
-                temperature = 0.7
+                temperature = 0.7,
+                maxTokens = if (wantsPlan) 3072 else 1536
             )
 
-            if (shouldForceStructuredPlan(lastUserText) && !looksStrictMarkdownTemplate(initial)) {
-                // Second pass: ask the model to rewrite into a strict template.
-                return@withContext rewriteIntoTemplate(systemContent, lastUserText, initial)
+            // If rate-limited, retry once with a short backoff and smaller output.
+            if (initial.startsWith("Error: 429")) {
+                delay(2200)
+                initial = callModel(
+                    systemContent = systemContent,
+                    conversation = conversation,
+                    temperature = 0.6,
+                    maxTokens = 2048
+                )
+            }
+
+            // If the first reply is already a usable plan, accept it (avoid a second API call).
+            if (wantsPlan) {
+                if (looksStrictMarkdownTemplate(initial)) return@withContext initial
+                if (looksBasicPlan(initial)) return@withContext initial
+                // Only attempt rewrite when the first call succeeded (not errors / rate-limit).
+                if (!initial.trimStart().startsWith("Error:", ignoreCase = true) &&
+                    !initial.trimStart().startsWith("Network error", ignoreCase = true)
+                ) {
+                    return@withContext rewriteIntoTemplate(systemContent, lastUserText, initial)
+                }
             }
 
             initial
@@ -118,6 +141,8 @@ class ChatbotService {
             "routine",
             "weeks",
             "week",
+            "month",
+            "months",
             "phase",
             "12 week",
             "4 week",
@@ -126,20 +151,30 @@ class ChatbotService {
         ).any { it in t }
     }
 
+    private fun looksBasicPlan(text: String): Boolean {
+        val hasCalories = Regex("""(?i)\bcalories\b\s*[:：]\s*\d{3,5}\s*kcal\b""").containsMatchIn(text)
+        val hasProtein = Regex("""(?i)\bprotein\b\s*[:：]\s*\d{2,4}\s*g\b""").containsMatchIn(text)
+        val hasWater = Regex("""(?i)\bwater\b\s*[:：]\s*(\d{3,5}\s*ml|\d+(?:\.\d+)?\s*l)\b""").containsMatchIn(text)
+        val hasWeekdays = Regex("""(?im)^\s*(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*[:：]""")
+            .containsMatchIn(text)
+        return hasCalories && hasProtein && hasWater && hasWeekdays
+    }
+
     private fun looksStrictMarkdownTemplate(text: String): Boolean {
         // Enforce Markdown headings + separators so the UI renders distinct typography.
         val idxNut = Regex("""(?m)^\s*##\s+nutrition\s+targets\s*$""", RegexOption.IGNORE_CASE).find(text)?.range?.first
+        val idxTarget = Regex("""(?m)^\s*##\s+target\s*$""", RegexOption.IGNORE_CASE).find(text)?.range?.first
         val idxPlan = Regex("""(?m)^\s*##\s+workout\s+plan\s*$""", RegexOption.IGNORE_CASE).find(text)?.range?.first
         val idxKeys = Regex("""(?m)^\s*##\s+keys\s+to\s+success\s*&\s*overtraining\s+prevention\s*$""", RegexOption.IGNORE_CASE)
             .find(text)?.range?.first
             ?: Regex("""(?m)^\s*##\s+keys\s+to\s+success.*$""", RegexOption.IGNORE_CASE).find(text)?.range?.first
 
-        if (idxNut == null || idxPlan == null || idxKeys == null) return false
-        if (!(idxNut < idxPlan && idxPlan < idxKeys)) return false
+        if (idxNut == null || idxTarget == null || idxPlan == null || idxKeys == null) return false
+        if (!(idxNut < idxTarget && idxTarget < idxPlan && idxPlan < idxKeys)) return false
 
         // Require divider lines between major sections.
         val dividerCount = Regex("""(?m)^\s*---\s*$""").findAll(text).count()
-        if (dividerCount < 3) return false
+        if (dividerCount < 4) return false
 
         // Require a short opening paragraph BEFORE Nutrition Targets (no heading).
         val prefix = text.substring(0, idxNut).trim()
@@ -192,6 +227,15 @@ Water: <number> ml OR <number> L
 
 ---
 
+## Target
+- Include ONLY ONE target type that matches the user's request (do NOT list multiple categories).
+- If the user asked for weight/fat loss: `- Weight Loss: <number> kg`
+- If the user asked for weight gain: `- Weight Gain: <number> kg`
+- If the user asked for muscle gain: `- Muscle Gain:` followed by bullets of selected muscle groups (if not specified, include all)
+- Otherwise: one bullet restating the user's target.
+
+---
+
 ## Workout Plan
 <plan content>
 
@@ -211,13 +255,15 @@ $draft
             ChatMessage(text = rewriteInstruction, isUser = true)
         )
         // Slightly lower temperature for formatting compliance.
-        return callModel(systemContent = systemContent, conversation = conv, temperature = 0.4)
+        return callModel(systemContent = systemContent, conversation = conv, temperature = 0.4, maxTokens = 4096)
     }
 
     private fun callModel(
         systemContent: String,
         conversation: List<ChatMessage>,
         temperature: Double
+        ,
+        maxTokens: Int
     ): String {
         val messagesJson = org.json.JSONArray().apply {
             put(
@@ -226,11 +272,16 @@ $draft
                     put("content", systemContent)
                 }
             )
-            conversation.filter(::includeInApiHistory).forEach { m ->
+            // Keep only the most recent turns to limit token load (avoids timeouts/429 on long chats).
+            conversation
+                .filter(::includeInApiHistory)
+                .takeLast(12)
+                .forEach { m ->
                 put(
                     JSONObject().apply {
                         put("role", if (m.isUser) "user" else "assistant")
-                        put("content", m.text)
+                        // Hard cap per-message length to prevent huge payloads.
+                        put("content", m.text.take(4000))
                     }
                 )
             }
@@ -240,7 +291,7 @@ $draft
             put("model", "glm-4.7-flash")
             put("messages", messagesJson)
             put("thinking", JSONObject().apply { put("type", "disabled") })
-            put("max_tokens", 4096)
+            put("max_tokens", maxTokens)
             put("temperature", temperature)
         }
 
@@ -284,10 +335,11 @@ $draft
         }
     }
 
-    private fun buildSystemPrompt(ctx: ChatApiContext): String {
+    private fun buildSystemPrompt(ctx: ChatApiContext, lastUserText: String): String {
         val dow = ctx.todayDayOfWeek.name.lowercase().replaceFirstChar { it.titlecase() }
         val timeCtx =
             "\n\n[App context] Today is $dow (${ctx.todayIsoDate}). When you give a weekly workout schedule, always list all 7 days in order: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday."
+        val requestConstraints = buildRequestConstraints(lastUserText)
         val profileCtx = run {
             val g = ctx.profileGender?.trim().orEmpty()
             val a = ctx.profileAge?.trim().orEmpty()
@@ -303,9 +355,51 @@ $draft
         }
         val planCtx = ctx.savedPlanRaw?.takeIf { it.isNotBlank() }?.let { raw ->
             "\n\n[User's current plan saved in Goals — read and follow this when they ask to adjust, tweak, replace, or continue the plan.]\n" +
-                raw.take(14_000)
+                // Cap injected plan text to reduce prompt bloat and latency.
+                raw.take(4_000)
         }.orEmpty()
-        return SYSTEM_PROMPT_BASE + timeCtx + profileCtx + planCtx
+        return SYSTEM_PROMPT_BASE + timeCtx + requestConstraints + profileCtx + planCtx
+    }
+
+    private fun buildRequestConstraints(lastUserText: String): String {
+        val weeks = inferRequestedWeeks(lastUserText)
+        val targetLine = inferTargetLine(lastUserText)
+        if (weeks == null && targetLine == null) return ""
+        return buildString {
+            append("\n\n[User request constraints]\n")
+            if (weeks != null) {
+                append("Requested duration: $weeks weeks. You MUST generate exactly $weeks weeks of plan (do not default to 12 weeks).\n")
+            }
+            if (targetLine != null) {
+                append("Target section MUST include ONLY this one bullet (no other goal types): $targetLine\n")
+            }
+        }
+    }
+
+    private fun inferRequestedWeeks(text: String): Int? {
+        val low = text.lowercase()
+        Regex("""\b(\d{1,2})\s*-\s*week\b""").find(low)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+        Regex("""\b(\d{1,2})\s*weeks?\b""").find(low)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+        Regex("""\b(\d{1,2})\s*-\s*month\b""").find(low)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { m ->
+            return (m * 4).coerceAtLeast(1)
+        }
+        Regex("""\b(\d{1,2})\s*months?\b""").find(low)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { m ->
+            // Project convention: 3 months = 12 weeks, so 1 month ≈ 4 weeks.
+            return (m * 4).coerceAtLeast(1)
+        }
+        return null
+    }
+
+    private fun inferTargetLine(text: String): String? {
+        val low = text.lowercase()
+        Regex("""\b(?:lose|loss)\s*(\d+(?:\.\d+)?)\s*kg\b""").find(low)?.groupValues?.getOrNull(1)?.let { kg ->
+            return "- Weight Loss: $kg kg"
+        }
+        Regex("""\b(?:gain|gaining)\s*(\d+(?:\.\d+)?)\s*kg\b""").find(low)?.groupValues?.getOrNull(1)?.let { kg ->
+            return "- Weight Gain: $kg kg"
+        }
+        if (low.contains("muscle gain") || low.contains("build muscle")) return "- Muscle Gain:"
+        return null
     }
 
     private val SYSTEM_PROMPT_BASE = """
@@ -326,8 +420,9 @@ $draft
             Output order when asked for a plan/program MUST be:
               1) A short opening paragraph (1–2 sentences) WITHOUT a heading
               2) Nutrition Targets (with numeric Calories/Protein/Water)
-              3) Workout Plan
-              4) Keys to Success & Overtraining Prevention
+              3) Target (ONLY the single relevant target type from the user's request)
+              4) Workout Plan
+              5) Keys to Success & Overtraining Prevention
             - Use Markdown headings (`## ...`) for these sections and add `---` separator lines between them so the app renders clear section spacing.
             - For phase titles that include a week range like `(Weeks 1–3)`, include ONLY ONE Monday–Sunday schedule for that phase (a single weekly template). Do NOT repeat the same week multiple times inside the phase.
 
@@ -348,6 +443,7 @@ $draft
 
             Full schedule per phase (no shorthand):
             - Within EVERY phase, you MUST list all seven days: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday — each as its own line `Weekday:` followed by that day's workout items (bullets). Rest days must still appear as `Weekday: Rest` or `Weekday: Rest day` with no other exercises that day.
+            - If a day has ANY workout items, do NOT include a "Rest day" bullet anywhere in that day. "Rest day" must only appear on true rest days, and it must be the ONLY item for that day (either `Weekday: Rest day` alone, or a single bullet `- Rest day`).
             - Do NOT use shortcuts such as "repeat the structure above", "same as week X", "add 5 minutes to LISS each week", or phase bodies that only summarize weeks (e.g. "Week 5: add 5 mins...") without a full Monday–Sunday block for that week inside the phase.
             - Do NOT use ranges like "Weeks 5–8" as a substitute for content; if you name a week range, you must still write out every weekday for every week in that range under the phase.
 

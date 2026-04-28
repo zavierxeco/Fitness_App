@@ -56,14 +56,19 @@ data class ParsedFitnessPlan(
 
     fun isRestDay(date: LocalDate): Boolean {
         val items = itemsForDate(date)
-        // Heuristic: rest days are typically a single item such as "Rest" or "Rest Day".
-        if (items.size != 1) return false
-        return isRestDayText(items.first().text)
+        // Rule: a day is a rest day ONLY when the day's workout list is exactly one item: "Rest day".
+        // This avoids misclassification when the model accidentally includes "Rest day" alongside real workouts.
+        return items.size == 1 && items.first().text.trim().equals("Rest day", ignoreCase = true)
     }
     private fun weeksSpanFromTitle(title: String): Int? {
         // Examples we want to catch:
-        // "Phase 1: ... (Weeks 1–2)", "Phase 2 ... (Week 3-4)"
-        val rx = Regex("""\(\s*Weeks?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*\)""", RegexOption.IGNORE_CASE)
+        // - "Phase 1: ... (Weeks 1–2)"
+        // - "Phase 1: Weeks 1-4"
+        // - "Phase 2: Week 5–8"
+        val rx = Regex(
+            """(?:\(|\b)\s*Weeks?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:\)|\b)""",
+            RegexOption.IGNORE_CASE
+        )
         val m = rx.find(title) ?: return null
         val a = m.groupValues[1].toIntOrNull() ?: return null
         val b = m.groupValues[2].toIntOrNull() ?: return null
@@ -221,9 +226,12 @@ object FitnessPlanParser {
         var endDate = inferredEnd ?: planStart.plusWeeks(DEFAULT_WEEKS.toLong())
 
         if (phases.isNotEmpty()) {
-            // Prefer the total duration described by the phase headers (supports "(Weeks 1-2)" etc.).
+            // Prefer the total duration described by the phase headers (supports "(Weeks 1-2)" and "Weeks 1-4" etc.).
             val totalWeeksFromTitles = phases.sumOf { phase ->
-                Regex("""\(\s*Weeks?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*\)""", RegexOption.IGNORE_CASE)
+                Regex(
+                    """(?:\(|\b)\s*Weeks?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:\)|\b)""",
+                    RegexOption.IGNORE_CASE
+                )
                     .find(phase.title)
                     ?.let { m ->
                         val a = m.groupValues[1].toIntOrNull()
