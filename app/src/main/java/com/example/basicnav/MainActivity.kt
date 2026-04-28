@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -106,7 +107,10 @@ fun BasicnavApp() {
             }
         }
     )
-    var currentScreen by rememberSaveable { mutableStateOf(0) }
+    val profileCreated = remember {
+        loadFromStorage(context, "profile_created", "false").equals("true", ignoreCase = true)
+    }
+    var currentScreen by rememberSaveable { mutableStateOf(if (profileCreated) 0 else 3) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Top bar
@@ -134,7 +138,7 @@ fun BasicnavApp() {
                 0 -> TrackingScreen(ringViewModel)
                 1 -> GoalsScreen(fitnessPlanViewModel = fitnessPlanViewModel)
                 2 -> NutritionScreen(nutritionViewModel = nutritionViewModel, fitnessPlanViewModel = fitnessPlanViewModel)
-                3 -> ProfileScreen()
+                3 -> ProfileScreen(startInEditMode = !profileCreated)
                 4 -> DebugScreen()
                 5 -> ChatbotScreen(viewModel = chatViewModel)
             }

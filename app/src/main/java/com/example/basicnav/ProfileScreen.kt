@@ -44,7 +44,7 @@ import java.io.File
 import java.io.FileOutputStream
 
 @Composable
-fun ProfileScreen() {
+fun ProfileScreen(startInEditMode: Boolean = false) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
 
@@ -78,7 +78,7 @@ fun ProfileScreen() {
         loadProfileImage()
     }
 
-    var isEditing by remember { mutableStateOf(false) }
+    var isEditing by remember { mutableStateOf(startInEditMode) }
 
     // Create an ActivityResultLauncher for picking images
     val imagePicker = rememberLauncherForActivityResult(
@@ -143,6 +143,7 @@ fun ProfileScreen() {
                         saveToStorage(context, "weight", weight)
                         saveToStorage(context, "height", height)
                         saveToStorage(context, "race", selectedRace)
+                        saveToStorage(context, "profile_created", "true")
                     }
                     isEditing = !isEditing
                 }
